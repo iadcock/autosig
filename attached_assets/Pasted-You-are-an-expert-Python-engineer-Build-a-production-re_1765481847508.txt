@@ -1,0 +1,229 @@
+You are an expert Python engineer. Build a production-ready Replit project for an automated trading bot that:
+
+- Reads options trade alerts from a Whop “Trade Alerts” feed (Victory Trades style)
+- Parses them into structured orders
+- Applies risk rules (1–2% position size)
+- Sends PAPER trades to Alpaca’s options API
+- Logs everything for review
+
+Assume this is for EDUCATIONAL USE ONLY. Do NOT enable live trading by default. All orders should go to Alpaca PAPER accounts unless the user explicitly changes a config flag.
+
+────────────────────────────────
+HIGH-LEVEL FUNCTIONALITY
+────────────────────────────────
+
+1) WHOP ALERT INGESTION
+- The bot should periodically fetch new alerts from a Whop “Trade Alerts” page.
+- For now, implement a simple HTTP fetch that:
+  - Reads from a configurable URL WHOP_ALERTS_URL
+  - Uses a session cookie WHOP_SESSION (stored as an environment variable) to authenticate.
+- Make the Whop fetcher an easily swappable module:
+  - If HTTP fetching fails or isn’t configured, fall back to reading alerts from a local file `sample_alerts.txt` so the user can test parsing without Whop.
+- Only process NEW alerts:
+  - Keep track of the last processed alert ID or timestamp in a small JSON file (`state.json`) so you don’t re-trade the same alert.
+
+2) SAMPLE ALERT FORMAT
+The parser MUST handle alerts of this style (Victory Trades via Whop):
+
+Example 1 – debit spread:
+GLD leap bullish call debit spread
+
+6/17/2027 exp
+
++1 415 C / -1 420 C
+Limit 1.85-1.9 debit to open
+
+2% size
+
+Example 2 – credit spread:
+SPX next day bear call credit spread
+
+12/12/25 exp
+
+-1 6860 C / +1 6865 C
+Limit 2.6-2.7 credit to open
+
+1% size
+
+Example 3 – exit:
+SPX December call debit exit
+
+I took this off. Will find other stocks to go long on.
+
+Limit 1.85-2.0 credit to close
+
+The parser should also ignore “chatty” alerts like:
+
+CIFR covered call roll
+
+Market is bear!!!!
+
+Buy to close this week covered call then sell the 19 covered call expiring next week.
+
+I'm tempted to just exit though
+
+For v1, focus on:
+- Call debit spreads
+- Call credit spreads
+- Exit alerts for existing spreads
+
+3) PARSING REQUIREMENTS
+Create a dedicated module `parser.py` with functions to:
+
+- Extract:
+  - underlying ticker (e.g., GLD, SPX) from the first line
+  - strategy type:
+    - “debit spread” → CALL_DEBIT_SPREAD
+    - “credit spread” → CALL_CREDIT_SPREAD
+    - “exit” → EXIT
+  - expiration date from lines like `6/17/2027 exp` or `12/12/25 exp`
+    - Normalize to ISO string: YYYY-MM-DD
+  - legs from lines like `+1 415 C / -1 420 C`:
+    - quantity (+1 or -1)
+    - strike (415, 420)
+    - option type (C or P; for now assume C)
+  - limit price range:
+    - `Limit 1.85-1.9 debit to open` → min=1.85, max=1.90, side=DEBIT
+    - `Limit 2.6-2.7 credit to open` → min=2.60, max=2.70, side=CREDIT
+  - position size:
+    - `2% size` → 0.02
+    - default to a configurable fallback (e.g. 0.01) if missing
+
+Represent parsed alerts as a Python dataclass or Pydantic model, e.g.:
+
+class ParsedSignal(BaseModel):
+    ticker: str
+    strategy: Literal["CALL_DEBIT_SPREAD","CALL_CREDIT_SPREAD","EXIT"]
+    expiration: date
+    legs: list[OptionLeg]  # each leg has side, quantity, strike, type (“CALL”)
+    limit_min: float
+    limit_max: float
+    limit_kind: Literal["DEBIT", "CREDIT"]
+    size_pct: float
+    raw_text: str
+
+4) RISK & POSITION SIZING
+Create `risk.py`:
+
+- Pull account equity from Alpaca paper API.
+- Given:
+  - account_equity
+  - size_pct (e.g. 0.02)
+  - limit_max
+  - strategy type (debit vs credit spread)
+- Compute number of spreads to trade (integer contracts), conservative rounding DOWN.
+- For debit spreads:
+  - Cost per spread ≈ limit_max * 100
+  - Max dollar risk = account_equity * size_pct
+  - max_contracts = floor(max_dollar_risk / (limit_max * 100))
+- For credit spreads:
+  - Use similar idea, but cap by max risk per spread (width of strikes * 100).
+- Enforce global safety caps (configurable):
+  - MAX_CONTRACTS_PER_TRADE
+  - MAX_OPEN_POSITIONS
+  - MAX_DAILY_RISK_PCT
+
+If risk constraints are violated, the system should log and SKIP the trade rather than crash.
+
+5) BROKER INTEGRATION (ALPACA PAPER)
+Use Alpaca as the first broker, PAPER mode only:
+
+- Put credentials in environment variables:
+  - ALPACA_API_KEY
+  - ALPACA_API_SECRET
+  - ALPACA_PAPER_BASE_URL (e.g. https://paper-api.alpaca.markets)
+- Create `broker_alpaca.py` with functions:
+
+  - get_account_equity() → float
+  - place_vertical_call_debit_spread(parsed_signal, quantity)
+  - place_vertical_call_credit_spread(parsed_signal, quantity)
+  - close_matching_position(parsed_signal)  # for EXIT alerts
+
+- Each function should:
+  - Construct the proper multi-leg options order for Alpaca’s options API.
+  - Use the limit price from parsed_signal:
+    - For debit: send a limit order at limit_max (worst acceptable fill).
+    - For credit: send limit at limit_min (minimum acceptable credit).
+  - Use DAY time-in-force.
+  - Log the API request + response.
+
+- ALL trading functions MUST check a config flag:
+  - If config.LIVE_TRADING is False (default), they only LOG what they *would* send instead of actually placing orders.
+  - This is crucial for safe testing on Replit without accidentally going live.
+
+6) SCHEDULER / MAIN LOOP
+In `main.py`:
+
+- Load settings from `config.py` (poll interval, URLs, flags).
+- Every POLL_INTERVAL seconds:
+  - Fetch new alerts from Whop (or from `sample_alerts.txt` in dev mode).
+  - For each new alert:
+    - Parse into ParsedSignal.
+    - Decide if it’s:
+      - Entry: debit or credit spread → run risk sizing → send to Alpaca or log.
+      - Exit: find existing position (by ticker + strikes) → send close order or log.
+    - Append to `logs/trades.log` with timestamp, parsed signal, and action taken.
+  - Update `state.json` with last processed alert ID/timestamp.
+
+The bot should handle exceptions gracefully:
+- Log errors
+- Skip bad alerts
+- Keep running
+
+7) CONFIG & ENV
+Create `config.py` to centralize settings:
+
+- WHOP_ALERTS_URL: str | None
+- WHOP_SESSION: from environment (via os.getenv)
+- POLL_INTERVAL_SECONDS: int (e.g., 30)
+- LIVE_TRADING: bool (default False)
+- DRY_RUN: bool (if True, never hit Alpaca, only log)
+- MAX_CONTRACTS_PER_TRADE: int
+- MAX_OPEN_POSITIONS: int
+- MAX_DAILY_RISK_PCT: float
+
+Use Replit’s Secrets for:
+- WHOP_SESSION
+- ALPACA_API_KEY
+- ALPACA_API_SECRET
+
+8) PROJECT STRUCTURE
+Create this structure:
+
+.
+├── main.py
+├── config.py
+├── scraper_whop.py
+├── parser.py
+├── risk.py
+├── broker_alpaca.py
+├── models.py
+├── state.json            # created at runtime
+├── logs/
+│   └── trades.log
+├── sample_alerts.txt     # example alerts for dev
+└── requirements.txt
+
+9) DEV QUALITY
+- Use Python 3.11+
+- Use type hints everywhere.
+- Use dataclasses or Pydantic models.
+- Write at least basic unit tests for `parser.py` and `risk.py` (can be minimal but real).
+- Add clear comments in code where user needs to:
+  - Add their Whop URL
+  - Set environment variables
+  - Switch from DRY_RUN to live paper execution
+
+10) README
+Create a README.md that explains:
+
+- What the project does
+- That it is for educational & PAPER TRADING use
+- How to:
+  - Set up environment variables on Replit
+  - Add a Whop session cookie or use `sample_alerts.txt`
+  - Run in DRY_RUN mode
+  - Switch to Alpaca paper trading
+- WARN clearly that the user is responsible for all trading risk and that this code is NOT financial advice.
+
+Build the full project now in this Replit with all the files above.
