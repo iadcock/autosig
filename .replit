@@ -28,3 +28,9 @@ args = "python main.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[userenv]
+
+[userenv.shared]
+DRY_RUN = "false"
+LIVE_TRADING = "true"
