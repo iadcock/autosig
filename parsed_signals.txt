@@ -1,0 +1,4 @@
+# Parsed Signals from Whop
+# Timestamp: 2025-12-11T20:39:16.496545
+# Total valid signals: 0
+============================================================
