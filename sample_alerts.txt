@@ -1,0 +1,38 @@
+GLD leap bullish call debit spread
+
+6/17/2027 exp
+
++1 415 C / -1 420 C
+Limit 1.85-1.9 debit to open
+
+2% size
+
+
+SPX next day bear call credit spread
+
+12/12/25 exp
+
+-1 6860 C / +1 6865 C
+Limit 2.6-2.7 credit to open
+
+1% size
+
+
+AAPL bullish call debit spread
+
+3/21/2025 exp
+
++1 185 C / -1 190 C
+Limit 2.10-2.25 debit to open
+
+1.5% size
+
+
+TSLA bear call credit spread
+
+1/17/2025 exp
+
+-1 420 C / +1 425 C
+Limit 1.50-1.65 credit to open
+
+1% size
