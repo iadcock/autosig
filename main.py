@@ -17,7 +17,7 @@ from typing import Optional
 
 import config
 from models import ParsedSignal, TradeState
-from parser import parse_alert, get_alert_hash, parse_multiple_alerts
+from parser import parse_alert, get_alert_hash
 from scraper_whop import get_alerts
 from risk import RiskManager
 import broker_alpaca
@@ -156,13 +156,17 @@ def run_polling_loop() -> None:
     while True:
         try:
             logger.info("Fetching alerts...")
-            raw_alerts = get_alerts()
+            alert_texts = get_alerts()
             
-            if not raw_alerts:
+            if not alert_texts:
                 logger.info("No alerts fetched")
             else:
-                signals = parse_multiple_alerts(raw_alerts)
-                logger.info(f"Parsed {len(signals)} valid signals")
+                signals = []
+                for alert_text in alert_texts:
+                    signal = parse_alert(alert_text)
+                    if signal:
+                        signals.append(signal)
+                logger.info(f"Parsed {len(signals)} valid signals from {len(alert_texts)} alerts")
                 
                 account_equity = broker_alpaca.get_account_equity()
                 if account_equity is None:
@@ -233,13 +237,17 @@ def run_once() -> None:
     state = load_state()
     risk_manager = RiskManager()
     
-    raw_alerts = get_alerts()
-    if not raw_alerts:
+    alert_texts = get_alerts()
+    if not alert_texts:
         logger.info("No alerts to process")
         return
     
-    signals = parse_multiple_alerts(raw_alerts)
-    logger.info(f"Parsed {len(signals)} valid signals")
+    signals = []
+    for alert_text in alert_texts:
+        signal = parse_alert(alert_text)
+        if signal:
+            signals.append(signal)
+    logger.info(f"Parsed {len(signals)} valid signals from {len(alert_texts)} alerts")
     
     account_equity = broker_alpaca.get_account_equity()
     if account_equity is None:

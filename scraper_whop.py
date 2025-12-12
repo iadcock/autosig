@@ -5,11 +5,27 @@ Fetches trade alerts from Whop's JavaScript-rendered pages.
 
 import os
 import logging
+import subprocess
 from typing import List, Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 import config
+
+def get_chromium_path() -> str:
+    """Find the system chromium executable path."""
+    try:
+        result = subprocess.run(
+            ["which", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium"
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +59,13 @@ class WhopScraperPlaywright:
         
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                chromium_path = get_chromium_path()
+                logger.debug(f"Using chromium at: {chromium_path}")
+                browser = p.chromium.launch(
+                    headless=True,
+                    executable_path=chromium_path,
+                    args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
+                )
                 
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
