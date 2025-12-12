@@ -6,6 +6,10 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-12: Added daily trade summary at market close
+  - Uses NYSE calendar (pandas_market_calendars) for accurate timing
+  - Runs at market close + 5 minutes (handles early closes)
+  - Summary files saved to logs/daily_summary_YYYY-MM-DD.txt
 - 2024-12-12: Upgraded Whop scraper to use Playwright for JavaScript-rendered pages
   - Added system chromium browser for headless rendering
   - Cookie authentication with `whop-core.access-token`
@@ -28,6 +32,7 @@ An automated trading bot that processes options trade alerts from Whop and execu
 | `risk.py` | Position sizing and risk limits |
 | `broker_alpaca.py` | Alpaca API integration |
 | `scraper_whop.py` | Playwright-based alert fetching (Whop or local file) |
+| `summary.py` | Daily trade summary generation at market close |
 | `models.py` | Pydantic data models |
 
 ### Data Flow
@@ -37,6 +42,17 @@ An automated trading bot that processes options trade alerts from Whop and execu
 3. `risk.py` → calculates position size
 4. `broker_alpaca.py` → executes orders (or logs in DRY_RUN)
 5. `main.py` → orchestrates and logs results
+6. `summary.py` → generates daily summary at market close
+
+### Daily Summary
+
+The bot automatically generates a daily trade summary at market close:
+
+- **Timing**: Runs at market close + 5 minutes (4:05 PM ET regular days, 1:05 PM ET early close days)
+- **Calendar**: Uses NYSE calendar via `pandas_market_calendars` for accurate trading day detection
+- **Early Close Support**: Automatically detects early close days (e.g., day before holidays)
+- **Output**: `logs/daily_summary_YYYY-MM-DD.txt`
+- **Content**: Trade count, status breakdown, ticker summary, and trade details
 
 ### Configuration
 
@@ -88,3 +104,9 @@ System dependencies installed:
 4. Duplicate alert detection via hashing
 5. Graceful error handling - skips bad alerts, keeps running
 6. Fallback to local alerts file if Whop fetch fails
+
+## Log Files
+
+- `logs/trades.log` - Full trade execution log
+- `logs/parsed_signals.csv` - CSV of all parsed signals (downloadable)
+- `logs/daily_summary_YYYY-MM-DD.txt` - Daily trade summaries at market close

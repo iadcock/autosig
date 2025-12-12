@@ -5,7 +5,7 @@ Generates end-of-day summaries at market close using NYSE calendar.
 
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -22,7 +22,7 @@ def get_nyse_calendar():
     return mcal.get_calendar("NYSE")
 
 
-def is_trading_day(date_obj: datetime.date) -> bool:
+def is_trading_day(date_obj: date_type) -> bool:
     """Check if a given date is a trading day."""
     calendar = get_nyse_calendar()
     schedule = calendar.schedule(
@@ -32,7 +32,7 @@ def is_trading_day(date_obj: datetime.date) -> bool:
     return len(schedule) > 0
 
 
-def get_market_close_time(date_obj: datetime.date) -> Optional[datetime]:
+def get_market_close_time(date_obj: date_type) -> Optional[datetime]:
     """
     Get the market close time for a specific date.
     Returns timezone-aware datetime in America/New_York.
@@ -81,7 +81,7 @@ def get_today_market_close_run_time(tz: str = "America/New_York") -> Optional[da
     return run_time
 
 
-def get_next_trading_day(from_date: datetime.date) -> Optional[datetime.date]:
+def get_next_trading_day(from_date: date_type) -> Optional[date_type]:
     """Get the next trading day after the given date."""
     calendar = get_nyse_calendar()
     
@@ -94,7 +94,10 @@ def get_next_trading_day(from_date: datetime.date) -> Optional[datetime.date]:
     )
     
     if len(schedule) > 0:
-        return schedule.index[0].date()
+        first_date = schedule.index[0]
+        if hasattr(first_date, 'to_pydatetime'):
+            return first_date.to_pydatetime().date()
+        return first_date.date()
     
     return None
 
@@ -122,7 +125,7 @@ def get_next_summary_run_time(tz: str = "America/New_York") -> Optional[datetime
     return None
 
 
-def generate_daily_summary(trading_date: datetime.date, signals_log_file: str) -> str:
+def generate_daily_summary(trading_date: date_type, signals_log_file: str) -> str:
     """
     Generate a daily summary for the given trading date.
     
@@ -219,7 +222,7 @@ def generate_daily_summary(trading_date: datetime.date, signals_log_file: str) -
     return "\n".join(summary_lines)
 
 
-def write_daily_summary(trading_date: datetime.date, signals_log_file: str, output_dir: str = "logs") -> str:
+def write_daily_summary(trading_date: date_type, signals_log_file: str, output_dir: str = "logs") -> str:
     """
     Generate and write the daily summary to a file.
     

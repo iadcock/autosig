@@ -14,12 +14,19 @@ import time
 from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import config
 from models import ParsedSignal, TradeState
 from parser import parse_alert, get_alert_hash
 from scraper_whop import get_alerts
 from risk import RiskManager
+from summary import (
+    get_today_market_close_run_time,
+    get_next_summary_run_time,
+    write_daily_summary,
+    NY_TZ
+)
 import broker_alpaca
 
 logging.basicConfig(
@@ -168,10 +175,51 @@ def process_signal(
     return result
 
 
+def check_and_run_daily_summary(state: TradeState) -> TradeState:
+    """
+    Check if it's time to run the daily summary and run it if needed.
+    Uses NYSE calendar to determine market close time.
+    """
+    now = datetime.now(NY_TZ)
+    today_ny = now.date()
+    today_str = today_ny.isoformat()
+    
+    if state.last_summary_date == today_str:
+        return state
+    
+    run_time = get_today_market_close_run_time()
+    
+    if run_time is None:
+        logger.debug(f"{today_str} is not a trading day - no summary needed")
+        return state
+    
+    if now >= run_time:
+        logger.info(f"Running daily summary for {today_str} (market close + 5 min)")
+        
+        try:
+            filepath = write_daily_summary(today_ny, SIGNALS_LOG_FILE)
+            logger.info(f"Daily summary written to: {filepath}")
+            
+            state.last_summary_date = today_str
+            save_state(state)
+            
+        except Exception as e:
+            logger.error(f"Failed to generate daily summary: {e}")
+    else:
+        next_run = run_time.strftime("%I:%M %p %Z")
+        logger.debug(f"Daily summary scheduled for {next_run}")
+    
+    return state
+
+
 def run_polling_loop() -> None:
     """Main polling loop that fetches and processes alerts."""
     logger.info("Starting trading bot polling loop...")
     config.print_config_summary()
+    
+    next_summary_time = get_next_summary_run_time()
+    if next_summary_time:
+        logger.info(f"Next daily summary scheduled for: {next_summary_time.strftime('%Y-%m-%d %I:%M %p %Z')}")
     
     warnings = config.validate_config()
     for warning in warnings:
@@ -235,6 +283,8 @@ def run_polling_loop() -> None:
                 state.daily_trades_count = 0
                 state.last_reset_date = date.today().isoformat()
                 save_state(state)
+            
+            state = check_and_run_daily_summary(state)
             
             logger.info(f"Sleeping for {config.POLL_INTERVAL_SECONDS} seconds...")
             time.sleep(config.POLL_INTERVAL_SECONDS)
