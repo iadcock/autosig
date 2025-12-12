@@ -18,6 +18,10 @@ author = "agent"
 task = "workflow.run"
 args = "Trading Bot"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Dashboard"
+
 [[workflows.workflow]]
 name = "Trading Bot"
 author = "agent"
@@ -29,9 +33,25 @@ args = "python main.py"
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Dashboard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python dashboard.py"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [userenv]
 
 [userenv.shared]
 DRY_RUN = "false"
 LIVE_TRADING = "true"
 USE_LOCAL_ALERTS = "false"
+
+[[ports]]
+localPort = 5000
+externalPort = 80

@@ -115,3 +115,27 @@ System dependencies installed:
 - `logs/trades.log` - Full trade execution log
 - `logs/parsed_signals.csv` - CSV of all parsed signals (downloadable)
 - `logs/daily_summary_YYYY-MM-DD.txt` - Daily trade summaries at market close
+- `logs/alerts_raw.jsonl` - Raw alerts fetched from Whop (JSONL)
+- `logs/alerts_parsed.jsonl` - Parsed alert results with classification (JSONL)
+- `logs/execution_plan.jsonl` - Execution plans for each signal (JSONL)
+
+## Reporting System
+
+The bot includes a comprehensive reporting system:
+
+### CLI Report Generation
+```bash
+python report_docx.py              # Last 24 hours (default)
+python report_docx.py --hours 48   # Custom hours
+```
+
+### Flask Dashboard
+- Runs on port 5000
+- "Generate Last 24 Hours Report" button
+- Reports saved to `reports/whop_trade_report_<timestamp>.docx`
+
+### Report Contents
+- Summary metrics (total alerts, signals, executions, skips)
+- Table of all trading signals parsed
+- Execution plans with contract details
+- Non-signal alerts with classification reasons

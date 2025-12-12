@@ -27,6 +27,11 @@ from summary import (
     write_daily_summary,
     NY_TZ
 )
+from jsonl_logger import (
+    log_raw_alert,
+    log_parsed_alert,
+    log_execution_plan
+)
 import broker_alpaca
 
 logging.basicConfig(
@@ -112,6 +117,59 @@ def should_reset_daily_limits(state: TradeState) -> bool:
     """Check if we should reset daily limits (new trading day)."""
     today = date.today().isoformat()
     return state.last_reset_date != today
+
+
+def _determine_non_signal_reason(alert_text: str) -> str:
+    """Determine why an alert was classified as non-signal."""
+    text_lower = alert_text.lower()
+    
+    if "roll" in text_lower:
+        return "Roll/adjustment commentary"
+    elif "assigned" in text_lower or "assignment" in text_lower:
+        return "Assignment notification"
+    elif "update" in text_lower or "status" in text_lower:
+        return "Status update or commentary"
+    elif "closed" in text_lower and "profit" in text_lower:
+        return "Trade result commentary"
+    elif len(alert_text) < 50:
+        return "Too short - not a trade alert"
+    elif not any(kw in text_lower for kw in ["call", "put", "debit", "credit", "spread"]):
+        return "No options keywords found"
+    else:
+        return "Does not match trade signal pattern"
+
+
+def _log_execution_plan_for_result(post_id: str, signal: ParsedSignal, result: dict) -> None:
+    """Log the execution plan based on processing result."""
+    status = result.get("status", "UNKNOWN")
+    
+    if status in ["SUBMITTED", "DRY_RUN"]:
+        action = "CLOSE_ORDER" if signal.strategy == "EXIT" else "PLACE_ORDER"
+    elif status in ["REJECTED", "SKIPPED"]:
+        action = "SKIP"
+    else:
+        action = "SKIP"
+    
+    quantity = result.get("quantity") or result.get("filled_quantity") or result.get("ordered_contracts")
+    
+    order_preview = {
+        "ticker": signal.ticker,
+        "strategy": signal.strategy,
+        "quantity": quantity,
+        "limit_price": signal.limit_max if signal.limit_max else None,
+        "order_type": "LIMIT",
+        "side": "debit" if "DEBIT" in (signal.strategy or "") else "credit",
+        "legs": [leg.model_dump() for leg in signal.legs] if signal.legs else [],
+    }
+    
+    log_execution_plan(
+        post_id=post_id,
+        action=action,
+        reason=result.get("reason") or result.get("message") or status,
+        order_preview=order_preview,
+        dry_run=config.DRY_RUN,
+        live_trading=config.LIVE_TRADING
+    )
 
 
 def process_signal(
@@ -244,25 +302,55 @@ def run_polling_loop() -> None:
                 logger.info("No alerts fetched")
             else:
                 signals = []
+                
                 for alert_text in alert_texts:
+                    alert_hash = get_alert_hash(alert_text)
+                    
+                    if alert_hash in state.processed_alert_hashes:
+                        continue
+                    
+                    post_id = log_raw_alert(body=alert_text, source="whop")
+                    
                     signal = parse_alert(alert_text)
                     if signal:
-                        signals.append(signal)
+                        signal_with_post_id = (signal, post_id)
+                        signals.append(signal_with_post_id)
+                        
+                        log_parsed_alert(
+                            post_id=post_id,
+                            classification="SIGNAL",
+                            parsed_signal={
+                                "ticker": signal.ticker,
+                                "strategy": signal.strategy,
+                                "expiry": signal.expiry,
+                                "legs": [leg.model_dump() for leg in signal.legs] if signal.legs else [],
+                                "limit_min": signal.limit_min,
+                                "limit_max": signal.limit_max,
+                            },
+                            raw_excerpt=alert_text[:500]
+                        )
+                    else:
+                        non_signal_reason = _determine_non_signal_reason(alert_text)
+                        log_parsed_alert(
+                            post_id=post_id,
+                            classification="NON_SIGNAL",
+                            non_signal_reason=non_signal_reason,
+                            raw_excerpt=alert_text[:500]
+                        )
+                
                 logger.info(f"Parsed {len(signals)} valid signals from {len(alert_texts)} alerts")
                 
                 account_equity = broker_alpaca.get_account_equity()
                 if account_equity is None:
                     logger.error("Could not get account equity. Skipping this cycle.")
                 else:
-                    for signal in signals:
+                    for signal, post_id in signals:
                         alert_hash = get_alert_hash(signal.raw_text)
-                        
-                        if alert_hash in state.processed_alert_hashes:
-                            logger.debug(f"Skipping already processed alert: {signal.ticker}")
-                            continue
                         
                         try:
                             result = process_signal(signal, risk_manager, account_equity)
+                            
+                            _log_execution_plan_for_result(post_id, signal, result)
                             
                             log_parsed_signal(signal, result.get('status', 'UNKNOWN'))
                             log_trade_result(signal, result)
