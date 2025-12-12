@@ -1,136 +1,237 @@
 """
-Whop alert scraper module.
-Fetches trade alerts from Whop or falls back to local sample file.
+Whop alert scraper module using Playwright.
+Fetches trade alerts from Whop's JavaScript-rendered pages.
 """
 
 import os
 import logging
-from typing import Optional
+from typing import List, Optional
 
-import requests
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 import config
 
 logger = logging.getLogger(__name__)
 
 
-class WhopScraper:
-    """Fetches alerts from Whop Trade Alerts feed."""
+class WhopScraperPlaywright:
+    """Fetches alerts from Whop Trade Alerts feed using Playwright."""
     
     def __init__(
         self,
         alerts_url: Optional[str] = None,
-        session_cookie: Optional[str] = None
+        access_token: Optional[str] = None
     ):
         self.alerts_url = alerts_url or config.WHOP_ALERTS_URL
-        self.session_cookie = session_cookie or config.WHOP_SESSION
+        self.access_token = access_token or config.WHOP_SESSION
     
-    def fetch_alerts(self) -> Optional[str]:
+    def fetch_alerts(self) -> List[str]:
         """
-        Fetch alerts from Whop URL.
-        Returns raw alert text or None if fetch fails.
+        Fetch alerts from Whop URL using Playwright headless browser.
+        Returns list of alert text strings.
         """
         if not self.alerts_url:
             logger.warning("WHOP_ALERTS_URL not configured")
-            return None
+            return []
         
-        if not self.session_cookie:
-            logger.warning("WHOP_SESSION not configured")
-            return None
+        if not self.access_token:
+            logger.warning("WHOP_SESSION (access token) not configured")
+            return []
+        
+        logger.info(f"Fetching alerts from Whop using Playwright...")
+        logger.debug(f"URL: {self.alerts_url}")
         
         try:
-            cookies = {
-                "whop-core.access-token": self.session_cookie,
-            }
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "Accept": "text/html,application/xhtml+xml",
-            }
-            
-            response = requests.get(
-                self.alerts_url,
-                cookies=cookies,
-                headers=headers,
-                timeout=15
-            )
-            
-            logger.info(f"HTTP Status: {response.status_code}")
-            logger.debug(f"Page preview: {response.text[:400]}")
-            
-            if self._is_login_page(response.text):
-                logger.error(
-                    "Whop authentication failed — your whop-core.access-token may have expired."
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
-                return None
-            
-            response.raise_for_status()
-            
-            return self._extract_alerts_from_html(response.text)
-            
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch alerts from Whop: {e}")
-            return None
+                
+                context.add_cookies([{
+                    "name": "whop-core.access-token",
+                    "value": self.access_token,
+                    "domain": ".whop.com",
+                    "path": "/",
+                    "httpOnly": True,
+                    "secure": True,
+                }])
+                
+                page = context.new_page()
+                
+                page.goto(self.alerts_url, wait_until="networkidle", timeout=30000)
+                
+                page.wait_for_timeout(2000)
+                
+                title = page.title()
+                content = page.content()
+                
+                if self._is_login_page(title, content):
+                    logger.error("Whop auth failed or token expired.")
+                    browser.close()
+                    return []
+                
+                alerts = self._extract_alerts(page)
+                
+                if alerts:
+                    preview = alerts[0][:300] if len(alerts[0]) > 300 else alerts[0]
+                    logger.info(f"First alert preview: {preview}")
+                
+                logger.info(f"Successfully fetched {len(alerts)} alerts from Whop")
+                
+                browser.close()
+                return alerts
+                
+        except PlaywrightTimeout as e:
+            logger.error(f"Timeout fetching Whop page: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching alerts with Playwright: {e}")
+            return []
     
-    def _is_login_page(self, html: str) -> bool:
-        """Check if the response is a login/landing page instead of alerts."""
+    def _is_login_page(self, title: str, content: str) -> bool:
+        """Check if the page is a login/landing page instead of alerts."""
         login_indicators = [
-            "Log in",
-            "Join now",
-            "Powered by Whop",
-            "/ month",
-            "Sign in to continue",
+            "log in",
+            "sign in",
+            "sign up",
+            "join now",
+            "create account",
         ]
-        text_lower = html.lower()
-        matches = sum(1 for indicator in login_indicators if indicator.lower() in text_lower)
-        return matches >= 3
+        
+        title_lower = title.lower()
+        content_lower = content.lower()
+        
+        for indicator in login_indicators:
+            if indicator in title_lower:
+                return True
+        
+        login_matches = sum(1 for ind in login_indicators if ind in content_lower)
+        if login_matches >= 2 and "alert" not in content_lower:
+            return True
+        
+        return False
     
-    def _extract_alerts_from_html(self, html: str) -> str:
+    def _extract_alerts(self, page) -> List[str]:
         """
-        Extract alert text from Whop HTML response.
-        This is a simplified extractor - may need adjustment based on actual Whop HTML structure.
+        Extract individual alert posts from the rendered page.
+        Tries multiple selectors to find alert content.
+        """
+        alerts = []
+        
+        selectors_to_try = [
+            "[data-testid='feed-post']",
+            "[data-testid='post-content']",
+            ".feed-post",
+            ".post-card",
+            ".alert-card",
+            "article",
+            "[class*='post']",
+            "[class*='feed'] > div",
+        ]
+        
+        for selector in selectors_to_try:
+            try:
+                elements = page.query_selector_all(selector)
+                if elements and len(elements) > 0:
+                    logger.debug(f"Found {len(elements)} elements with selector: {selector}")
+                    for el in elements:
+                        text = el.inner_text().strip()
+                        if text and len(text) > 20:
+                            alerts.append(text)
+                    if alerts:
+                        break
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {e}")
+                continue
+        
+        if not alerts:
+            logger.debug("No post elements found, extracting main content...")
+            try:
+                main_selectors = ["main", "[role='main']", ".content", "#content"]
+                for sel in main_selectors:
+                    main_el = page.query_selector(sel)
+                    if main_el:
+                        text = main_el.inner_text().strip()
+                        if text and len(text) > 50:
+                            alerts = self._split_into_alerts(text)
+                            break
+            except Exception as e:
+                logger.debug(f"Main content extraction failed: {e}")
+        
+        if not alerts:
+            try:
+                body_text = page.inner_text("body")
+                if body_text and len(body_text) > 100:
+                    logger.debug(f"Fallback: extracting from body (length: {len(body_text)})")
+                    alerts = self._split_into_alerts(body_text)
+            except Exception as e:
+                logger.debug(f"Body extraction failed: {e}")
+        
+        return alerts
+    
+    def _split_into_alerts(self, text: str) -> List[str]:
+        """
+        Split bulk text into individual alerts.
+        Looks for common patterns that separate alerts.
         """
         import re
         
-        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        patterns = [
+            r'\n\s*(?=(?:[A-Z]{1,5}\s+(?:Call|Put|Debit|Credit)))',
+            r'\n\s*(?=(?:\d{1,2}/\d{1,2}/\d{2,4}\s+exp))',
+            r'\n{3,}',
+        ]
         
-        text = re.sub(r'<[^>]+>', '\n', text)
+        for pattern in patterns:
+            parts = re.split(pattern, text, flags=re.IGNORECASE)
+            valid_parts = [p.strip() for p in parts if p.strip() and len(p.strip()) > 30]
+            if len(valid_parts) > 1:
+                return valid_parts
         
-        text = re.sub(r'\n\s*\n', '\n\n', text)
+        if len(text) > 100:
+            return [text]
         
-        return text.strip()
+        return []
 
 
-def fetch_alerts_from_local_file(filepath: Optional[str] = None) -> Optional[str]:
+def fetch_alerts_from_local_file(filepath: Optional[str] = None) -> List[str]:
     """
     Read alerts from a local sample file.
-    Used as fallback when Whop fetching is not configured or fails.
+    Returns list of alert strings (split by double newlines).
     """
     filepath = filepath or config.SAMPLE_ALERTS_FILE
     
     if not os.path.exists(filepath):
         logger.warning(f"Sample alerts file not found: {filepath}")
-        return None
+        return []
     
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read()
+            content = f.read()
+        
+        alerts = [a.strip() for a in content.split('\n\n\n') if a.strip()]
+        if len(alerts) <= 1:
+            alerts = [a.strip() for a in content.split('\n\n') if a.strip() and len(a.strip()) > 30]
+        
+        return alerts
     except IOError as e:
         logger.error(f"Failed to read sample alerts file: {e}")
-        return None
+        return []
 
 
-def get_alerts() -> Optional[str]:
+def get_alerts() -> List[str]:
     """
     Main function to get alerts.
-    Tries Whop first, falls back to local file.
+    Returns list of alert strings.
+    Tries Whop first (via Playwright), falls back to local file.
     """
     if config.USE_LOCAL_ALERTS:
         logger.info("Using local alerts file (USE_LOCAL_ALERTS=true)")
         return fetch_alerts_from_local_file()
     
-    scraper = WhopScraper()
+    scraper = WhopScraperPlaywright()
     alerts = scraper.fetch_alerts()
     
     if alerts:
@@ -138,3 +239,14 @@ def get_alerts() -> Optional[str]:
     
     logger.info("Falling back to local sample alerts file")
     return fetch_alerts_from_local_file()
+
+
+def get_alerts_as_text() -> Optional[str]:
+    """
+    Legacy function for backwards compatibility.
+    Returns alerts as a single joined text string.
+    """
+    alerts = get_alerts()
+    if alerts:
+        return "\n\n\n".join(alerts)
+    return None

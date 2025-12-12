@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "alpaca-py>=0.43.2",
+    "playwright>=1.57.0",
     "pydantic>=2.12.5",
     "pytest>=9.0.2",
     "python-dateutil>=2.9.0.post0",
