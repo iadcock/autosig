@@ -61,3 +61,4 @@ class TradeState(BaseModel):
     daily_trades_count: int = 0
     daily_risk_used: float = 0.0
     last_reset_date: Optional[str] = None
+    last_summary_date: Optional[str] = None

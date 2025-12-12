@@ -4,7 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["gitFull", "libxcrypt", "playwright-driver", "nspr", "nss", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "mesa", "alsa-lib", "atk", "at-spi2-core", "at-spi2-atk", "cups", "dbus", "expat", "glib", "gtk3", "pango", "libgbm", "libxkbcommon", "chromium"]
+packages = ["alsa-lib", "at-spi2-atk", "at-spi2-core", "atk", "chromium", "cups", "dbus", "expat", "gitFull", "glib", "gtk3", "libgbm", "libxcrypt", "libxkbcommon", "mesa", "nspr", "nss", "pango", "playwright-driver", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb"]
 
 [workflows]
 runButton = "Project"
