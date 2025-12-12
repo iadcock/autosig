@@ -30,16 +30,42 @@ def get_chromium_path() -> str:
 logger = logging.getLogger(__name__)
 
 
+def _get_whop_cookies() -> List[dict]:
+    """
+    Build the full cookie list for Whop authentication.
+    Uses all available Whop cookies from environment.
+    """
+    cookies = []
+    
+    cookie_mappings = [
+        ("whop-core.access-token", config.WHOP_ACCESS_TOKEN),
+        ("whop-core.refresh-token", config.WHOP_REFRESH_TOKEN),
+        ("whop-core.uid-token", config.WHOP_UID_TOKEN),
+        ("whop-core.user-id", config.WHOP_USER_ID),
+        ("whop-core.ssk", config.WHOP_SSK),
+        ("_Host-whop-core.csrf-token", config.WHOP_CSRF),
+    ]
+    
+    for name, value in cookie_mappings:
+        if value:
+            cookies.append({
+                "name": name,
+                "value": value,
+                "domain": ".whop.com",
+                "path": "/",
+                "httpOnly": True,
+                "secure": True,
+            })
+    
+    return cookies
+
+
 class WhopScraperPlaywright:
     """Fetches alerts from Whop Trade Alerts feed using Playwright."""
     
-    def __init__(
-        self,
-        alerts_url: Optional[str] = None,
-        access_token: Optional[str] = None
-    ):
+    def __init__(self, alerts_url: Optional[str] = None):
         self.alerts_url = alerts_url or config.WHOP_ALERTS_URL
-        self.access_token = access_token or config.WHOP_SESSION
+        self.cookies = _get_whop_cookies()
     
     def fetch_alerts(self) -> List[str]:
         """
@@ -50,12 +76,13 @@ class WhopScraperPlaywright:
             logger.warning("WHOP_ALERTS_URL not configured")
             return []
         
-        if not self.access_token:
-            logger.warning("WHOP_SESSION (access token) not configured")
+        if not self.cookies:
+            logger.warning("No Whop cookies configured. Set WHOP_ACCESS_TOKEN or WHOP_SESSION.")
             return []
         
         logger.info(f"Fetching alerts from Whop using Playwright...")
         logger.debug(f"URL: {self.alerts_url}")
+        logger.debug(f"Using {len(self.cookies)} authentication cookies")
         
         try:
             with sync_playwright() as p:
@@ -71,20 +98,22 @@ class WhopScraperPlaywright:
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
                 
-                context.add_cookies([{
-                    "name": "whop-core.access-token",
-                    "value": self.access_token,
-                    "domain": ".whop.com",
-                    "path": "/",
-                    "httpOnly": True,
-                    "secure": True,
-                }])
+                context.add_cookies(self.cookies)
                 
                 page = context.new_page()
                 
-                page.goto(self.alerts_url, wait_until="networkidle", timeout=30000)
+                try:
+                    page.goto(self.alerts_url, wait_until="domcontentloaded", timeout=30000)
+                except PlaywrightTimeout:
+                    logger.warning("DOM load timed out, trying with 'load' strategy...")
+                    page.goto(self.alerts_url, wait_until="load", timeout=45000)
                 
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
+                
+                try:
+                    page.wait_for_selector("[class*='post'], article, [class*='feed']", timeout=10000)
+                except PlaywrightTimeout:
+                    logger.debug("No post selectors found, continuing anyway...")
                 
                 title = page.title()
                 content = page.content()

@@ -16,6 +16,13 @@ WHOP_ALERTS_URL: Optional[str] = os.getenv("WHOP_ALERTS_URL")
 
 WHOP_SESSION: Optional[str] = os.getenv("WHOP_SESSION")
 
+WHOP_ACCESS_TOKEN: Optional[str] = os.getenv("WHOP_ACCESS_TOKEN") or os.getenv("WHOP_SESSION")
+WHOP_REFRESH_TOKEN: Optional[str] = os.getenv("WHOP_REFRESH_TOKEN")
+WHOP_UID_TOKEN: Optional[str] = os.getenv("WHOP_UID_TOKEN")
+WHOP_USER_ID: Optional[str] = os.getenv("WHOP_USER_ID")
+WHOP_SSK: Optional[str] = os.getenv("WHOP_SSK")
+WHOP_CSRF: Optional[str] = os.getenv("WHOP_CSRF")
+
 POLL_INTERVAL_SECONDS: int = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
 
 LIVE_TRADING: bool = os.getenv("LIVE_TRADING", "false").lower() == "true"
@@ -64,8 +71,8 @@ def validate_config() -> list[str]:
     if not USE_LOCAL_ALERTS:
         if not WHOP_ALERTS_URL:
             warnings.append("WHOP_ALERTS_URL not set. Will fall back to local alerts.")
-        if not WHOP_SESSION:
-            warnings.append("WHOP_SESSION not set. Cannot authenticate with Whop.")
+        if not WHOP_ACCESS_TOKEN:
+            warnings.append("WHOP_ACCESS_TOKEN not set. Cannot authenticate with Whop.")
     
     return warnings
 

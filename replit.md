@@ -67,8 +67,13 @@ All settings via environment variables:
 
 - `ALPACA_API_KEY`: Alpaca paper trading API key
 - `ALPACA_API_SECRET`: Alpaca paper trading API secret
-- `WHOP_SESSION`: Value of `whop-core.access-token` cookie from Whop
 - `WHOP_ALERTS_URL`: URL to your Whop Trade Alerts feed
+- `WHOP_ACCESS_TOKEN`: Value of `whop-core.access-token` cookie
+- `WHOP_REFRESH_TOKEN`: Value of `whop-core.refresh-token` cookie
+- `WHOP_UID_TOKEN`: Value of `whop-core.uid-token` cookie
+- `WHOP_USER_ID`: Value of `whop-core.user-id` cookie
+- `WHOP_SSK`: Value of `whop-core.ssk` cookie
+- `WHOP_CSRF`: Value of `_Host-whop-core.csrf-token` cookie
 
 ### Playwright Setup
 
