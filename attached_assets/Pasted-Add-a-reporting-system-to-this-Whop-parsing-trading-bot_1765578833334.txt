@@ -1,0 +1,65 @@
+Add a reporting system to this Whop-parsing trading bot.
+
+DEFAULT BEHAVIOR:
+- Reports should cover the LAST 24 HOURS by default (no user input required).
+- The Flask button should generate a LAST-24-HOURS report.
+
+GOALS:
+1) Log every alert fetched from Whop (raw).
+2) Log the parsed result for every alert (signal vs non-signal).
+3) Log an execution plan for each parsed signal that shows what the bot WOULD do (even in DRY_RUN).
+4) Generate a Word (.docx) report that includes:
+   - Summary counts (total alerts, signals, non-signals, executed, skipped)
+   - A table of all SIGNAL alerts parsed
+   - For each SIGNAL, a human-readable execution plan (contracts, limit used, debit/credit, legs)
+   - A section listing NON_SIGNAL alerts (commentary/rolls/etc.) and why they were not traded
+5) Provide BOTH:
+   - A CLI command to generate the report (python report_docx.py) that defaults to last 24 hours
+   - A simple Flask endpoint/button to request it
+
+IMPLEMENTATION DETAILS:
+
+A) Create these log files as JSONL (one JSON per line) under ./logs:
+- logs/alerts_raw.jsonl
+  fields: ts_iso, source="whop", post_id (or stable hash), title, body, url(optional)
+
+- logs/alerts_parsed.jsonl
+  fields: ts_iso, post_id, classification in {"SIGNAL","NON_SIGNAL"}, parsed_signal (dict or null), parse_error (str or null), non_signal_reason (str or null), raw_excerpt
+
+- logs/execution_plan.jsonl
+  fields: ts_iso, post_id, action in {"PLACE_ORDER","SKIP","CLOSE_ORDER"}, reason (str), order_preview (dict), DRY_RUN (bool), LIVE_TRADING (bool)
+
+Ensure appends are atomic and do not crash the bot on logging failures.
+
+B) Ensure the main pipeline writes:
+- raw alert -> alerts_raw.jsonl
+- parsed output -> alerts_parsed.jsonl
+- decision/execution plan -> execution_plan.jsonl
+
+C) Create report_docx.py using python-docx:
+- CLI usage:
+    - python report_docx.py              (defaults to last 24 hours)
+    - python report_docx.py --hours 24   (optional override)
+- reads last 24 hours from the three log files (match by post_id)
+- produces a Word doc at ./reports/whop_trade_report_<timestamp>.docx
+- include sections:
+  1) Title + timestamp range
+  2) Summary metrics
+  3) Table: Signals (ticker, strategy, expiry, legs, limit range, size)
+  4) Section: Execution Plans (per signal, include calculated contract qty + selected limit + whether order would be placed or skipped + reason)
+  5) Section: Non-signals (title/body excerpt + non_signal_reason)
+
+D) Add Flask UI (if not already present):
+- app.py (or dashboard.py) with:
+  - GET / -> simple page with a "Generate Last 24 Hours Report" button
+  - GET /report -> generates the last-24-hours report and returns the DOCX as a download
+  - Optional: GET /report?hours=24 for override, but default must be 24.
+- Add dependencies to requirements.txt:
+  flask
+  python-docx
+
+E) Safety:
+- Do not include secrets or cookie values in reports.
+- If there are no alerts in the last 24 hours, generate a report that clearly says so.
+
+Implement cleanly, keep existing bot functionality intact, and make sure the report generation works even in DRY_RUN mode.
