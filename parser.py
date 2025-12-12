@@ -1,6 +1,11 @@
 """
 Alert parser module for the trading bot.
 Parses Victory Trades style alerts into structured ParsedSignal objects.
+
+Classification Rules:
+- SIGNAL: Must have ticker + expiration + leg(s) + limit price + size indicator
+- EXIT: Contains exit keywords with ticker reference
+- NON_SIGNAL: Commentary, assignments, coaching, etc.
 """
 
 import re
@@ -16,41 +21,62 @@ import config
 def parse_alert(raw_text: str) -> Optional[ParsedSignal]:
     """
     Parse a raw alert text into a ParsedSignal object.
-    Returns None if the alert cannot be parsed or should be ignored.
+    Returns None if the alert cannot be parsed or is non-signal.
+    
+    A valid SIGNAL must have ALL of:
+    - Ticker symbol (1-5 capital letters)
+    - Expiration date
+    - At least one option leg
+    - Limit price
+    - Size indicator
     """
     if not raw_text or not raw_text.strip():
         return None
     
     text = raw_text.strip()
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
     
-    if len(lines) < 2:
+    if is_non_signal_content(text):
         return None
     
-    if is_chatty_alert(text):
+    if is_exit_signal(text):
+        ticker = extract_ticker_anywhere(text)
+        if ticker:
+            return ParsedSignal(
+                ticker=ticker,
+                strategy="EXIT",
+                expiration=None,
+                legs=[],
+                limit_min=0.0,
+                limit_max=0.0,
+                limit_kind="DEBIT",
+                size_pct=0.0,
+                raw_text=raw_text
+            )
         return None
     
-    strategy = extract_strategy(text)
-    if not strategy:
-        return None
+    ticker = extract_ticker_anywhere(text)
+    expiration = extract_expiration(text)
+    legs = extract_legs(text)
+    limit_info = extract_limit_price(text)
+    size_pct = extract_size_pct(text)
+    has_size = has_size_indicator(text)
     
-    ticker = extract_ticker(lines[0])
     if not ticker:
         return None
-    
-    expiration = extract_expiration(text)
-    
-    legs = extract_legs(text)
-    
-    limit_info = extract_limit_price(text)
+    if not expiration:
+        return None
+    if not legs:
+        return None
     if not limit_info:
+        return None
+    if not has_size:
         return None
     
     limit_min, limit_max, limit_kind = limit_info
     
-    size_pct = extract_size_pct(text)
+    strategy = determine_strategy(text, limit_kind)
     
-    strategy_literal = cast(Literal["CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", "EXIT"], strategy)
+    strategy_literal = cast(Literal["CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", "PUT_DEBIT_SPREAD", "PUT_CREDIT_SPREAD", "EXIT"], strategy)
     limit_kind_literal = cast(Literal["DEBIT", "CREDIT"], limit_kind)
     
     return ParsedSignal(
@@ -66,74 +92,104 @@ def parse_alert(raw_text: str) -> Optional[ParsedSignal]:
     )
 
 
-def is_chatty_alert(text: str) -> bool:
+def is_non_signal_content(text: str) -> bool:
     """
-    Detect "chatty" alerts that should be ignored.
-    These are conversational messages without clear trade instructions.
+    Detect non-signal content that should be classified as NON_SIGNAL.
+    These are commentary, assignments, coaching posts, etc.
     """
     text_lower = text.lower()
     
-    chatty_indicators = [
-        "i'm tempted",
-        "i am tempted",
-        "thinking about",
-        "might want to",
-        "considering",
-        "market is bear",
-        "market is bull",
-        "buy to close this week",
-        "roll",
-        "covered call roll",
+    non_signal_patterns = [
+        r'\bwill be assigned\b',
+        r'\bgot assigned\b',
+        r'\bwas assigned\b',
+        r'\bassignment\b',
+        r'\bwatch out\b',
+        r'\bmarket is doing\b',
+        r'\bmarket update\b',
+        r'\bI\'m cool with\b',
+        r'\bmax profit\b.*\bclosed\b',
+        r'\bhit max profit\b',
     ]
     
-    for indicator in chatty_indicators:
-        if indicator in text_lower:
-            if "debit spread" not in text_lower and "credit spread" not in text_lower and "exit" not in text_lower:
+    for pattern in non_signal_patterns:
+        if re.search(pattern, text_lower):
+            if not has_trade_structure(text):
                 return True
     
-    if "limit" not in text_lower:
-        if "debit spread" not in text_lower and "credit spread" not in text_lower:
+    if len(text) < 40:
+        return True
+    
+    if text_lower.startswith("like\n") or text_lower.startswith("share\n"):
+        return True
+    
+    return False
+
+
+def has_trade_structure(text: str) -> bool:
+    """Check if text has the structure of a trade alert."""
+    has_leg = bool(re.search(r'[+-]\d+\s+\d+\s*[CP]', text, re.IGNORECASE))
+    has_limit = 'limit' in text.lower()
+    has_size = has_size_indicator(text)
+    
+    return has_leg and has_limit and has_size
+
+
+def is_exit_signal(text: str) -> bool:
+    """Check if this is an exit/close signal."""
+    text_lower = text.lower()
+    
+    exit_patterns = [
+        r'\bexit\b',
+        r'\btake profits?\b',
+        r'\bcut\s+(the\s+)?position\b',
+        r'\bclose\s+(the\s+)?position\b',
+        r'\bclose\s+(it|this)\b',
+        r'\bclosing\b.*\bposition\b',
+        r'\bselling?\s+to\s+close\b',
+        r'\bbuy\s+to\s+close\b',
+    ]
+    
+    for pattern in exit_patterns:
+        if re.search(pattern, text_lower):
             return True
     
     return False
 
 
-def extract_strategy(text: str) -> Optional[str]:
-    """Extract the strategy type from alert text."""
-    text_lower = text.lower()
-    
-    if "exit" in text_lower or "close" in text_lower:
-        if "debit" in text_lower or "credit" in text_lower:
-            return "EXIT"
-    
-    if "debit spread" in text_lower or "debit to open" in text_lower:
-        return "CALL_DEBIT_SPREAD"
-    
-    if "credit spread" in text_lower or "credit to open" in text_lower:
-        return "CALL_CREDIT_SPREAD"
-    
-    return None
-
-
-def extract_ticker(first_line: str) -> Optional[str]:
+def extract_ticker_anywhere(text: str) -> Optional[str]:
     """
-    Extract the underlying ticker from the first line of the alert.
-    Assumes ticker is the first word (all caps, 1-5 characters).
+    Extract ticker symbol from anywhere in the text.
+    Looks for 1-5 capital letter words that are likely tickers.
     """
-    words = first_line.split()
-    if not words:
-        return None
+    common_tickers = [
+        'SPY', 'QQQ', 'IWM', 'DIA', 'SPX', 'NDX', 'GLD', 'SLV', 'TLT', 'XLF',
+        'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD',
+        'NFLX', 'BABA', 'BA', 'DIS', 'JPM', 'V', 'MA', 'WMT', 'HD', 'NKE',
+        'COST', 'MCD', 'SBUX', 'PEP', 'KO', 'XOM', 'CVX', 'CRM', 'ADBE', 'PYPL',
+        'SQ', 'SHOP', 'UBER', 'LYFT', 'COIN', 'ROKU', 'ZM', 'SNAP', 'PINS', 'TWTR',
+        'GME', 'AMC', 'PLTR', 'SOFI', 'RIVN', 'LCID', 'F', 'GM', 'INTC', 'MU',
+        'EOSE', 'VIX', 'USO', 'EEM', 'FXI', 'EWZ', 'GDX', 'GDXJ', 'XLE', 'XLK'
+    ]
     
-    potential_ticker = words[0].upper()
+    excluded_words = {
+        'LEAP', 'LEAPS', 'CALL', 'PUT', 'BEAR', 'BULL', 'DAY', 'NEXT', 'THE', 'AND',
+        'BUY', 'SELL', 'OPEN', 'CLOSE', 'LIMIT', 'SIZE', 'EXP', 'WITH', 'FOR',
+        'DEBIT', 'CREDIT', 'SPREAD', 'IRON', 'CONDOR', 'BUTTERFLY', 'STRADDLE',
+        'STRANGLE', 'LIKE', 'SHARE', 'COMMENTS', 'WRITE', 'COMMENT', 'AGO',
+        'VICTORY', 'TRADES', 'VT', 'BULLISH', 'BEARISH'
+    }
     
-    if re.match(r'^[A-Z]{1,5}$', potential_ticker):
-        return potential_ticker
+    for ticker in common_tickers:
+        if re.search(rf'\b{ticker}\b', text, re.IGNORECASE):
+            return ticker
+    
+    words = re.findall(r'\b([A-Z]{1,5})\b', text)
     
     for word in words:
-        word_upper = word.upper()
-        if re.match(r'^[A-Z]{1,5}$', word_upper):
-            if word_upper not in ['LEAP', 'CALL', 'PUT', 'BEAR', 'BULL', 'DAY', 'NEXT', 'THE', 'AND']:
-                return word_upper
+        if word not in excluded_words:
+            if len(word) >= 2 or word in ['F', 'V', 'X']:
+                return word
     
     return None
 
@@ -144,9 +200,10 @@ def extract_expiration(text: str) -> Optional[date]:
     Handles formats like:
     - 6/17/2027 exp
     - 12/12/25 exp
+    - 6/17/2027
     - December exp
     """
-    exp_pattern = r'(\d{1,2}/\d{1,2}/\d{2,4})\s*exp'
+    exp_pattern = r'(\d{1,2}/\d{1,2}/\d{2,4})\s*(?:exp|expiration)?'
     match = re.search(exp_pattern, text, re.IGNORECASE)
     
     if match:
@@ -162,8 +219,8 @@ def extract_expiration(text: str) -> Optional[date]:
         except (ValueError, TypeError):
             pass
     
-    month_pattern = r'(\w+)\s+exp'
-    match = re.search(month_pattern, text, re.IGNORECASE)
+    month_exp_pattern = r'(\w+)\s+exp'
+    match = re.search(month_exp_pattern, text, re.IGNORECASE)
     if match:
         month_name = match.group(1)
         try:
@@ -183,6 +240,8 @@ def extract_legs(text: str) -> list[OptionLeg]:
     Handles formats like:
     - +1 415 C / -1 420 C
     - -1 6860 C / +1 6865 C
+    - Sell to open the 15 put
+    - Buy the 420 call
     """
     legs = []
     
@@ -204,6 +263,27 @@ def extract_legs(text: str) -> list[OptionLeg]:
             option_type=option_type
         ))
     
+    if not legs:
+        sell_pattern = r'sell\s+(?:to\s+open\s+)?(?:the\s+)?(\d+(?:\.\d+)?)\s*(call|put)'
+        sell_matches = re.findall(sell_pattern, text, re.IGNORECASE)
+        for strike_str, opt_type in sell_matches:
+            legs.append(OptionLeg(
+                side="SELL",
+                quantity=1,
+                strike=float(strike_str),
+                option_type="CALL" if opt_type.lower() == "call" else "PUT"
+            ))
+        
+        buy_pattern = r'buy\s+(?:to\s+open\s+)?(?:the\s+)?(\d+(?:\.\d+)?)\s*(call|put)'
+        buy_matches = re.findall(buy_pattern, text, re.IGNORECASE)
+        for strike_str, opt_type in buy_matches:
+            legs.append(OptionLeg(
+                side="BUY",
+                quantity=1,
+                strike=float(strike_str),
+                option_type="CALL" if opt_type.lower() == "call" else "PUT"
+            ))
+    
     return legs
 
 
@@ -215,9 +295,10 @@ def extract_limit_price(text: str) -> Optional[tuple[float, float, str]]:
     Handles formats like:
     - Limit 1.85-1.9 debit to open
     - Limit 2.6-2.7 credit to open
-    - Limit 1.85-2.0 credit to close
+    - Limit .15 credit
+    - Limit 1.85 debit
     """
-    range_pattern = r'limit\s+(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(debit|credit)'
+    range_pattern = r'limit\s+\.?(\d+(?:\.\d+)?)\s*[-–]\s*\.?(\d+(?:\.\d+)?)\s*(debit|credit)'
     match = re.search(range_pattern, text, re.IGNORECASE)
     
     if match:
@@ -230,7 +311,7 @@ def extract_limit_price(text: str) -> Optional[tuple[float, float, str]]:
         
         return (min_price, max_price, kind)
     
-    single_pattern = r'limit\s+(\d+(?:\.\d+)?)\s*(debit|credit)'
+    single_pattern = r'limit\s+\.?(\d+(?:\.\d+)?)\s*(debit|credit)'
     match = re.search(single_pattern, text, re.IGNORECASE)
     
     if match:
@@ -239,6 +320,22 @@ def extract_limit_price(text: str) -> Optional[tuple[float, float, str]]:
         return (price, price, kind)
     
     return None
+
+
+def has_size_indicator(text: str) -> bool:
+    """Check if text contains a size indicator."""
+    text_lower = text.lower()
+    
+    if re.search(r'\d+(?:\.\d+)?\s*%\s*size', text_lower):
+        return True
+    
+    if re.search(r'\$\d+(?:,\d+)*(?:\.\d+)?\s*(?:in\s+)?(?:buying\s+power|bp)', text_lower):
+        return True
+    
+    if re.search(r'\d+\s*(?:contract|lot)s?', text_lower):
+        return True
+    
+    return False
 
 
 def extract_size_pct(text: str) -> float:
@@ -255,6 +352,25 @@ def extract_size_pct(text: str) -> float:
         return pct / 100.0
     
     return config.DEFAULT_SIZE_PCT
+
+
+def determine_strategy(text: str, limit_kind: str) -> str:
+    """
+    Determine the strategy type based on text content and limit kind.
+    """
+    text_lower = text.lower()
+    
+    has_put = 'put' in text_lower or re.search(r'\d+\s*P\b', text)
+    has_call = 'call' in text_lower or re.search(r'\d+\s*C\b', text)
+    
+    if limit_kind == "DEBIT":
+        if has_put and not has_call:
+            return "PUT_DEBIT_SPREAD"
+        return "CALL_DEBIT_SPREAD"
+    else:
+        if has_put and not has_call:
+            return "PUT_CREDIT_SPREAD"
+        return "CALL_CREDIT_SPREAD"
 
 
 def get_alert_hash(raw_text: str) -> str:

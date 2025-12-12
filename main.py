@@ -322,7 +322,7 @@ def run_polling_loop() -> None:
                             parsed_signal={
                                 "ticker": signal.ticker,
                                 "strategy": signal.strategy,
-                                "expiry": signal.expiry,
+                                "expiration": str(signal.expiration) if signal.expiration else None,
                                 "legs": [leg.model_dump() for leg in signal.legs] if signal.legs else [],
                                 "limit_min": signal.limit_min,
                                 "limit_max": signal.limit_max,

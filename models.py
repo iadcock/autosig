@@ -24,7 +24,7 @@ class OptionLeg(BaseModel):
 class ParsedSignal(BaseModel):
     """Represents a fully parsed trade alert signal."""
     ticker: str = Field(description="Underlying symbol, e.g., GLD, SPX")
-    strategy: Literal["CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", "EXIT"]
+    strategy: Literal["CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", "PUT_DEBIT_SPREAD", "PUT_CREDIT_SPREAD", "EXIT"]
     expiration: Optional[date] = Field(default=None, description="Option expiration date")
     legs: list[OptionLeg] = Field(default_factory=list, description="Option legs for the trade")
     limit_min: float = Field(ge=0, description="Minimum limit price")

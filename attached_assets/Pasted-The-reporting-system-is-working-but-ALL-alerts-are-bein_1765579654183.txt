@@ -1,0 +1,61 @@
+The reporting system is working, but ALL alerts are being classified as NON_SIGNAL.
+This is incorrect. Real trade alerts (e.g. GLD LEAP debit spreads) are being rejected.
+
+Fix the signal classification logic as follows:
+
+1) Update the parser so an alert is classified as SIGNAL if ALL of these are present
+   anywhere in the text (multi-line allowed):
+   - A ticker symbol (1–5 capital letters, common ETF/stock symbols)
+   - An expiration date (MM/DD/YYYY, MM/DD/YY, or textual like "6/17/2027 exp")
+   - At least one option leg:
+       examples:
+         "+1 415 C"
+         "-1 420 C"
+         "Sell to open the 15 put"
+   - A limit price:
+       examples:
+         "Limit 1.85-1.9 debit"
+         "Limit .15 credit to open"
+   - A size indicator:
+       examples:
+         "2% size"
+         "1% size"
+         "$1500 in buying power"
+
+2) Strategy names like "bullish call debit spread" should be OPTIONAL.
+   Do not reject alerts just because the strategy string does not match a hardcoded list.
+
+3) Allow LEAPS and long-dated expirations.
+   Do NOT reject based on expiration being far in the future.
+
+4) If all required components are present:
+   - classification = "SIGNAL"
+   - parsed_signal should include:
+       ticker
+       expiration
+       legs (list)
+       limit_min / limit_max
+       debit_or_credit
+       size_pct (or size_bp)
+       raw_text
+
+5) If the alert is an EXIT (e.g. "take profits", "cut", "close"):
+   - classification = "SIGNAL"
+   - action_hint = "EXIT"
+   - Do NOT classify exits as NON_SIGNAL.
+
+6) Update non-signal reasons so commentary, assignments, and coaching posts
+   are still marked NON_SIGNAL with a clear reason.
+
+7) Re-run the parser logic against recent alerts so that
+   a GLD LEAP call debit spread like:
+
+   "GLD leap bullish call debit spread
+    6/17/2027 exp
+    +1 415 C / -1 420 C
+    Limit 1.85-1.9 debit to open
+    2% size"
+
+   is classified as SIGNAL and produces an execution plan.
+
+Do NOT change logging or report generation — only fix parsing and classification.
