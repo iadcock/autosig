@@ -34,4 +34,4 @@ outputType = "console"
 [userenv.shared]
 DRY_RUN = "false"
 LIVE_TRADING = "true"
-USE_LOCAL_ALERTS = "true"
+USE_LOCAL_ALERTS = "false"
