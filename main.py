@@ -32,6 +32,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+SIGNALS_LOG_FILE = "logs/parsed_signals.csv"
+
+
 def setup_file_logging() -> None:
     """Set up file logging to trades.log."""
     log_dir = Path("logs")
@@ -43,6 +46,37 @@ def setup_file_logging() -> None:
         logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     )
     logging.getLogger().addHandler(file_handler)
+    
+    if not os.path.exists(SIGNALS_LOG_FILE):
+        with open(SIGNALS_LOG_FILE, 'w') as f:
+            f.write("timestamp,ticker,strategy,expiration,size_pct,limit_min,limit_max,limit_kind,legs,status\n")
+
+
+def log_parsed_signal(signal: ParsedSignal, status: str = "PARSED") -> None:
+    """Log a parsed signal to the CSV file for download."""
+    try:
+        legs_str = ""
+        if signal.legs:
+            legs_str = " | ".join([
+                f"{leg.side} {leg.quantity}x ${leg.strike} {leg.option_type}"
+                for leg in signal.legs
+            ])
+        
+        with open(SIGNALS_LOG_FILE, 'a') as f:
+            f.write(
+                f"{datetime.now().isoformat()},"
+                f"{signal.ticker},"
+                f"{signal.strategy},"
+                f"{signal.expiration},"
+                f"{signal.size_pct:.2%},"
+                f"${signal.limit_min:.2f},"
+                f"${signal.limit_max:.2f},"
+                f"{signal.limit_kind},"
+                f"\"{legs_str}\","
+                f"{status}\n"
+            )
+    except Exception as e:
+        logger.error(f"Failed to log signal: {e}")
 
 
 def load_state() -> TradeState:
@@ -182,6 +216,7 @@ def run_polling_loop() -> None:
                         try:
                             result = process_signal(signal, risk_manager, account_equity)
                             
+                            log_parsed_signal(signal, result.get('status', 'UNKNOWN'))
                             log_trade_result(signal, result)
                             
                             state.processed_alert_hashes.append(alert_hash)
@@ -262,6 +297,7 @@ def run_once() -> None:
             continue
         
         result = process_signal(signal, risk_manager, account_equity)
+        log_parsed_signal(signal, result.get('status', 'UNKNOWN'))
         log_trade_result(signal, result)
         
         state.processed_alert_hashes.append(alert_hash)
