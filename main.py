@@ -152,13 +152,22 @@ def _log_execution_plan_for_result(post_id: str, signal: ParsedSignal, result: d
     
     quantity = result.get("quantity") or result.get("filled_quantity") or result.get("ordered_contracts")
     
+    if signal.strategy in ["LONG_STOCK", "LONG_OPTION"]:
+        side = "buy"
+    elif "DEBIT" in (signal.strategy or ""):
+        side = "debit"
+    elif "CREDIT" in (signal.strategy or ""):
+        side = "credit"
+    else:
+        side = "debit"
+    
     order_preview = {
         "ticker": signal.ticker,
         "strategy": signal.strategy,
-        "quantity": quantity,
+        "quantity": quantity or signal.quantity,
         "limit_price": signal.limit_max if signal.limit_max else None,
-        "order_type": "LIMIT",
-        "side": "debit" if "DEBIT" in (signal.strategy or "") else "credit",
+        "order_type": "LIMIT" if signal.limit_max else "MARKET",
+        "side": side,
         "legs": [leg.model_dump() for leg in signal.legs] if signal.legs else [],
     }
     

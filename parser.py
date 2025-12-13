@@ -227,11 +227,11 @@ def parse_long_position(text: str, raw_text: str) -> Optional[ParsedSignal]:
     if is_option:
         strategy = "LONG_OPTION"
         legs = []
-        if strike and option_type:
+        if option_type:
             legs.append(OptionLeg(
                 side="BUY",
                 quantity=quantity,
-                strike=strike,
+                strike=strike if strike else 0.0,
                 option_type=option_type
             ))
     else:

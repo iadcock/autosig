@@ -6,6 +6,11 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-13: Added support for LONG positions (stocks and options)
+  - New strategies: LONG_STOCK, LONG_OPTION
+  - Parses patterns like "Long AAPL", "Buy 100 shares of TSLA", "Long SPY 480C Jan 2026"
+  - TRADING_MODE config: CONSERVATIVE (default) skips long positions, STANDARD allows them
+  - Long positions are logged to alerts_parsed.jsonl and execution_plan.jsonl
 - 2024-12-12: Added daily trade summary at market close
   - Uses NYSE calendar (pandas_market_calendars) for accurate timing
   - Runs at market close + 5 minutes (handles early closes)
@@ -59,6 +64,9 @@ The bot automatically generates a daily trade summary at market close:
 All settings via environment variables:
 - `DRY_RUN`: true/false (default: true)
 - `LIVE_TRADING`: true/false (default: false)
+- `TRADING_MODE`: CONSERVATIVE/STANDARD (default: CONSERVATIVE)
+  - CONSERVATIVE: Long positions are classified but skipped (not executed)
+  - STANDARD: Long positions may be executed (when implemented)
 - `USE_LOCAL_ALERTS`: true/false (default: true)
 - `POLL_INTERVAL_SECONDS`: integer (default: 30)
 - `MAX_CONTRACTS_PER_TRADE`: integer (default: 10)
