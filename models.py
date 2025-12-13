@@ -24,14 +24,20 @@ class OptionLeg(BaseModel):
 class ParsedSignal(BaseModel):
     """Represents a fully parsed trade alert signal."""
     ticker: str = Field(description="Underlying symbol, e.g., GLD, SPX")
-    strategy: Literal["CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", "PUT_DEBIT_SPREAD", "PUT_CREDIT_SPREAD", "EXIT"]
+    strategy: Literal[
+        "CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", 
+        "PUT_DEBIT_SPREAD", "PUT_CREDIT_SPREAD", 
+        "LONG_STOCK", "LONG_OPTION",
+        "EXIT"
+    ]
     expiration: Optional[date] = Field(default=None, description="Option expiration date")
     legs: list[OptionLeg] = Field(default_factory=list, description="Option legs for the trade")
     limit_min: float = Field(ge=0, description="Minimum limit price")
     limit_max: float = Field(ge=0, description="Maximum limit price")
-    limit_kind: Literal["DEBIT", "CREDIT"]
+    limit_kind: Literal["DEBIT", "CREDIT"] = "DEBIT"
     size_pct: float = Field(ge=0, le=1, description="Position size as decimal, e.g., 0.02 for 2%")
     raw_text: str = Field(description="Original alert text for reference")
+    quantity: int = Field(default=1, description="Number of shares or contracts for long positions")
     
     @property
     def spread_width(self) -> float:

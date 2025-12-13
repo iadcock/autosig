@@ -48,6 +48,12 @@ TRADE_LOG_FILE: str = "logs/trades.log"
 
 USE_LOCAL_ALERTS: bool = os.getenv("USE_LOCAL_ALERTS", "true").lower() == "true"
 
+TRADING_MODE: str = os.getenv("TRADING_MODE", "CONSERVATIVE").upper()
+
+def is_conservative_mode() -> bool:
+    """Check if trading mode is CONSERVATIVE (long positions disabled)."""
+    return TRADING_MODE == "CONSERVATIVE"
+
 
 def validate_config() -> list[str]:
     """
@@ -84,6 +90,7 @@ def print_config_summary() -> None:
     print("=" * 50)
     print(f"DRY_RUN: {DRY_RUN} (no actual orders sent)")
     print(f"LIVE_TRADING: {LIVE_TRADING}")
+    print(f"TRADING_MODE: {TRADING_MODE}")
     print(f"USE_LOCAL_ALERTS: {USE_LOCAL_ALERTS}")
     print(f"POLL_INTERVAL_SECONDS: {POLL_INTERVAL_SECONDS}")
     print(f"MAX_CONTRACTS_PER_TRADE: {MAX_CONTRACTS_PER_TRADE}")

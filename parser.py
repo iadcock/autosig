@@ -4,6 +4,8 @@ Parses Victory Trades style alerts into structured ParsedSignal objects.
 
 Classification Rules:
 - SIGNAL: Must have ticker + expiration + leg(s) + limit price + size indicator
+- LONG_STOCK: "Long TICKER" or "Buy X shares of TICKER"
+- LONG_OPTION: "Long TICKER strikeC/P expiration" or "Buying TICKER calls/puts"
 - EXIT: Contains exit keywords with ticker reference
 - NON_SIGNAL: Commentary, assignments, coaching, etc.
 """
@@ -29,6 +31,8 @@ def parse_alert(raw_text: str) -> Optional[ParsedSignal]:
     - At least one option leg
     - Limit price
     - Size indicator
+    
+    LONG positions (LONG_STOCK, LONG_OPTION) have relaxed requirements.
     """
     if not raw_text or not raw_text.strip():
         return None
@@ -53,6 +57,10 @@ def parse_alert(raw_text: str) -> Optional[ParsedSignal]:
                 raw_text=raw_text
             )
         return None
+    
+    long_signal = parse_long_position(text, raw_text)
+    if long_signal:
+        return long_signal
     
     ticker = extract_ticker_anywhere(text)
     expiration = extract_expiration(text)
@@ -155,6 +163,151 @@ def is_exit_signal(text: str) -> bool:
             return True
     
     return False
+
+
+def is_long_position(text: str) -> bool:
+    """
+    Check if this is a LONG position alert.
+    Matches patterns like:
+    - "Long AAPL"
+    - "Buy 100 shares of TSLA"
+    - "Long SPY 480C Jan 2026"
+    - "Buying QQQ calls"
+    - "Going long on NVDA"
+    """
+    text_lower = text.lower()
+    
+    long_patterns = [
+        r'\blong\s+[A-Z]{1,5}\b',
+        r'\bbuying?\s+\d*\s*shares?\s+(?:of\s+)?[A-Z]{1,5}\b',
+        r'\bbuying?\s+[A-Z]{1,5}\s+(?:calls?|puts?)\b',
+        r'\bgoing\s+long\s+(?:on\s+)?[A-Z]{1,5}\b',
+        r'\blong\s+[A-Z]{1,5}\s+\d+\s*[CP]\b',
+    ]
+    
+    for pattern in long_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    
+    return False
+
+
+def parse_long_position(text: str, raw_text: str) -> Optional[ParsedSignal]:
+    """
+    Parse a LONG position alert.
+    Returns ParsedSignal with strategy LONG_STOCK or LONG_OPTION.
+    """
+    if not is_long_position(text):
+        return None
+    
+    ticker = extract_ticker_for_long(text)
+    if not ticker:
+        return None
+    
+    quantity = extract_long_quantity(text)
+    expiration = extract_expiration(text)
+    option_type = extract_long_option_type(text)
+    strike = extract_long_strike(text)
+    
+    is_option = (option_type is not None) or (expiration is not None) or (strike is not None)
+    
+    if is_option:
+        strategy = "LONG_OPTION"
+        legs = []
+        if strike and option_type:
+            legs.append(OptionLeg(
+                side="BUY",
+                quantity=quantity,
+                strike=strike,
+                option_type=option_type
+            ))
+    else:
+        strategy = "LONG_STOCK"
+        legs = []
+    
+    strategy_literal = cast(Literal["CALL_DEBIT_SPREAD", "CALL_CREDIT_SPREAD", "PUT_DEBIT_SPREAD", "PUT_CREDIT_SPREAD", "LONG_STOCK", "LONG_OPTION", "EXIT"], strategy)
+    
+    return ParsedSignal(
+        ticker=ticker,
+        strategy=strategy_literal,
+        expiration=expiration,
+        legs=legs,
+        limit_min=0.0,
+        limit_max=0.0,
+        limit_kind="DEBIT",
+        size_pct=config.DEFAULT_SIZE_PCT,
+        raw_text=raw_text,
+        quantity=quantity
+    )
+
+
+def extract_ticker_for_long(text: str) -> Optional[str]:
+    """Extract ticker specifically from long position patterns."""
+    patterns = [
+        r'\blong\s+([A-Z]{1,5})\b',
+        r'\bbuying?\s+\d*\s*shares?\s+(?:of\s+)?([A-Z]{1,5})\b',
+        r'\bbuying?\s+([A-Z]{1,5})\s+(?:calls?|puts?)\b',
+        r'\bgoing\s+long\s+(?:on\s+)?([A-Z]{1,5})\b',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    
+    return extract_ticker_anywhere(text)
+
+
+def extract_long_quantity(text: str) -> int:
+    """Extract quantity (shares or contracts) from long position alert."""
+    shares_pattern = r'\b(\d+)\s*shares?\b'
+    match = re.search(shares_pattern, text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    
+    contracts_pattern = r'\b(\d+)\s*(?:contracts?|lots?)\b'
+    match = re.search(contracts_pattern, text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    
+    qty_pattern = r'\bbuy(?:ing)?\s+(\d+)\s+'
+    match = re.search(qty_pattern, text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    
+    return 1
+
+
+def extract_long_option_type(text: str) -> Optional[Literal["CALL", "PUT"]]:
+    """Extract option type (CALL or PUT) from long position alert."""
+    text_lower = text.lower()
+    
+    if re.search(r'\bcalls?\b', text_lower):
+        return "CALL"
+    if re.search(r'\bputs?\b', text_lower):
+        return "PUT"
+    
+    if re.search(r'\d+\s*C\b', text):
+        return "CALL"
+    if re.search(r'\d+\s*P\b', text):
+        return "PUT"
+    
+    return None
+
+
+def extract_long_strike(text: str) -> Optional[float]:
+    """Extract strike price from long position alert."""
+    strike_pattern = r'\b(\d+(?:\.\d+)?)\s*[CP]\b'
+    match = re.search(strike_pattern, text, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    
+    strike_pattern2 = r'\$(\d+(?:\.\d+)?)\s+(?:calls?|puts?)'
+    match = re.search(strike_pattern2, text, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    
+    return None
 
 
 def extract_ticker_anywhere(text: str) -> Optional[str]:
