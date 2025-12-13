@@ -126,11 +126,26 @@ def is_non_signal_content(text: str) -> bool:
                 return True
     
     if len(text) < 40:
-        return True
+        if not _looks_like_long_position(text):
+            return True
     
     if text_lower.startswith("like\n") or text_lower.startswith("share\n"):
         return True
     
+    return False
+
+
+def _looks_like_long_position(text: str) -> bool:
+    """Quick check if text looks like a long position alert (used before full parsing)."""
+    long_patterns = [
+        r'\blong\s+[A-Z]{1,5}\b',
+        r'\bbuy(?:ing)?\s+\d+\s*shares?\s+(?:of\s+)?[A-Z]{1,5}\b',
+        r'\bbuy(?:ing)?\s+[A-Z]{1,5}\s+(?:calls?|puts?)\b',
+        r'\bgoing\s+long\b',
+    ]
+    for pattern in long_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
     return False
 
 
@@ -175,12 +190,10 @@ def is_long_position(text: str) -> bool:
     - "Buying QQQ calls"
     - "Going long on NVDA"
     """
-    text_lower = text.lower()
-    
     long_patterns = [
         r'\blong\s+[A-Z]{1,5}\b',
-        r'\bbuying?\s+\d*\s*shares?\s+(?:of\s+)?[A-Z]{1,5}\b',
-        r'\bbuying?\s+[A-Z]{1,5}\s+(?:calls?|puts?)\b',
+        r'\bbuy(?:ing)?\s+\d+\s*shares?\s+(?:of\s+)?[A-Z]{1,5}\b',
+        r'\bbuy(?:ing)?\s+[A-Z]{1,5}\s+(?:calls?|puts?)\b',
         r'\bgoing\s+long\s+(?:on\s+)?[A-Z]{1,5}\b',
         r'\blong\s+[A-Z]{1,5}\s+\d+\s*[CP]\b',
     ]
@@ -244,16 +257,18 @@ def parse_long_position(text: str, raw_text: str) -> Optional[ParsedSignal]:
 def extract_ticker_for_long(text: str) -> Optional[str]:
     """Extract ticker specifically from long position patterns."""
     patterns = [
-        r'\blong\s+([A-Z]{1,5})\b',
-        r'\bbuying?\s+\d*\s*shares?\s+(?:of\s+)?([A-Z]{1,5})\b',
-        r'\bbuying?\s+([A-Z]{1,5})\s+(?:calls?|puts?)\b',
         r'\bgoing\s+long\s+(?:on\s+)?([A-Z]{1,5})\b',
+        r'\blong\s+([A-Z]{1,5})\b',
+        r'\bbuy(?:ing)?\s+\d+\s*shares?\s+(?:of\s+)?([A-Z]{1,5})\b',
+        r'\bbuy(?:ing)?\s+([A-Z]{1,5})\s+(?:calls?|puts?)\b',
     ]
     
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            return match.group(1).upper()
+            ticker = match.group(1).upper()
+            if ticker not in {'ON', 'OF', 'THE', 'A', 'AN'}:
+                return ticker
     
     return extract_ticker_anywhere(text)
 

@@ -189,6 +189,26 @@ def process_signal(
             risk_manager.record_exit()
         return result
     
+    if signal.strategy in ["LONG_STOCK", "LONG_OPTION"]:
+        if config.is_conservative_mode():
+            logger.info(f"Long position skipped in CONSERVATIVE mode: {signal.ticker}")
+            return {
+                "status": "SKIPPED",
+                "reason": "Long positions disabled in CONSERVATIVE mode",
+                "ticker": signal.ticker,
+                "strategy": signal.strategy,
+                "quantity": signal.quantity
+            }
+        else:
+            logger.info(f"Long position detected but execution not yet implemented: {signal.ticker}")
+            return {
+                "status": "SKIPPED",
+                "reason": "Long position execution not yet implemented",
+                "ticker": signal.ticker,
+                "strategy": signal.strategy,
+                "quantity": signal.quantity
+            }
+    
     num_contracts, rejection_reason = risk_manager.calculate_position_size(
         signal, account_equity
     )
@@ -220,6 +240,14 @@ def process_signal(
         result = broker_alpaca.place_vertical_call_credit_spread(signal, num_contracts)
         spread_width = signal.spread_width or 5.0
         dollar_risk = (spread_width - signal.limit_min) * 100 * num_contracts
+    elif signal.strategy in ["PUT_DEBIT_SPREAD", "PUT_CREDIT_SPREAD"]:
+        logger.info(f"Put spread execution not yet implemented: {signal.strategy}")
+        return {
+            "status": "SKIPPED",
+            "reason": f"Put spread execution not yet implemented",
+            "ticker": signal.ticker,
+            "strategy": signal.strategy
+        }
     else:
         return {
             "status": "ERROR",
