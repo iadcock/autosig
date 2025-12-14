@@ -221,7 +221,8 @@ class TradierClient:
         side: Literal["buy", "sell", "buy_to_cover", "sell_short"] = "buy",
         quantity: int = 1,
         order_type: Literal["market", "limit", "stop", "stop_limit"] = "market",
-        limit_price: float = None,
+        limit_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
         tif: Literal["day", "gtc", "pre", "post"] = "day"
     ) -> dict:
         """
@@ -233,7 +234,8 @@ class TradierClient:
             side: Order side (buy, sell, buy_to_cover, sell_short)
             quantity: Number of shares
             order_type: Order type (market, limit, stop, stop_limit)
-            limit_price: Limit price (required for limit orders)
+            limit_price: Limit price (required for limit/stop_limit orders)
+            stop_price: Stop trigger price (required for stop/stop_limit orders)
             tif: Time in force (day, gtc, pre, post)
             
         Returns:
@@ -257,6 +259,9 @@ class TradierClient:
         if order_type in ["limit", "stop_limit"] and limit_price:
             order_data["price"] = str(limit_price)
         
+        if order_type in ["stop", "stop_limit"] and stop_price:
+            order_data["stop"] = str(stop_price)
+        
         response = self._request("POST", f"/v1/accounts/{acct}/orders", data=order_data)
         return response.get("order", response)
     
@@ -270,7 +275,7 @@ class TradierClient:
         side: Literal["buy_to_open", "buy_to_close", "sell_to_open", "sell_to_close"] = "buy_to_open",
         quantity: int = 1,
         order_type: Literal["market", "limit"] = "market",
-        limit_price: float = None,
+        limit_price: Optional[float] = None,
         tif: Literal["day", "gtc"] = "day"
     ) -> dict:
         """

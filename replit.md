@@ -6,6 +6,16 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-14: Added broker-agnostic TradeIntent schema and execution routing
+  - TradeIntent model: Broker-independent trade representation
+  - ExecutionResult model: Unified execution outcome
+  - Executors: TradierExecutor, PaperExecutor, HistoricalExecutor
+  - Router: Routes by execution_mode (PAPER, LIVE, HISTORICAL)
+  - Demo script: trade_intent_demo.py
+- 2024-12-14: Added Tradier API client (tradier_client.py)
+  - Account management, market data, order placement
+  - Supports stocks, ETFs, and single-leg options
+  - Smoke test: tradier_smoketest.py
 - 2024-12-13: Added support for LONG positions (stocks and options)
   - New strategies: LONG_STOCK, LONG_OPTION
   - Parses patterns like "Long AAPL", "Buy 100 shares of TSLA", "Long SPY 480C Jan 2026"
@@ -39,6 +49,10 @@ An automated trading bot that processes options trade alerts from Whop and execu
 | `scraper_whop.py` | Playwright-based alert fetching (Whop or local file) |
 | `summary.py` | Daily trade summary generation at market close |
 | `models.py` | Pydantic data models |
+| `trade_intent.py` | TradeIntent and ExecutionResult models |
+| `tradier_client.py` | Tradier API client |
+| `executors/` | Trade executors (tradier, paper, historical) |
+| `execution/router.py` | Execution routing by mode |
 
 ### Data Flow
 
@@ -71,8 +85,48 @@ All settings via environment variables:
 - `POLL_INTERVAL_SECONDS`: integer (default: 30)
 - `MAX_CONTRACTS_PER_TRADE`: integer (default: 10)
 
+### TradeIntent Execution System
+
+Broker-agnostic trade execution:
+
+```python
+from trade_intent import TradeIntent, OptionLeg
+from execution import execute_trade
+
+# Stock order
+intent = TradeIntent(
+    execution_mode="PAPER",  # PAPER, LIVE, or HISTORICAL
+    instrument_type="STOCK",
+    underlying="SPY",
+    action="BUY",
+    order_type="MARKET",
+    quantity=1
+)
+result = execute_trade(intent)
+
+# Option order
+intent = TradeIntent(
+    execution_mode="PAPER",
+    instrument_type="OPTION",
+    underlying="SPX",
+    action="BUY_TO_OPEN",
+    order_type="LIMIT",
+    limit_price=15.50,
+    quantity=1,
+    legs=[OptionLeg(side="BUY", quantity=1, strike=6100.0, option_type="CALL", expiration="2025-01-17")]
+)
+result = execute_trade(intent)
+```
+
+Execution modes:
+- **PAPER**: Simulated fills (PaperExecutor)
+- **LIVE**: Real orders via Tradier (requires TRADIER_TOKEN)
+- **HISTORICAL**: Backtesting with historical prices
+
 ### Secrets Required
 
+- `TRADIER_TOKEN`: Tradier sandbox/live API token
+- `TRADIER_ACCOUNT_ID`: Tradier account ID (optional, auto-discovered)
 - `ALPACA_API_KEY`: Alpaca paper trading API key
 - `ALPACA_API_SECRET`: Alpaca paper trading API secret
 - `WHOP_ALERTS_URL`: URL to your Whop Trade Alerts feed
