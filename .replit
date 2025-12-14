@@ -22,6 +22,10 @@ args = "Trading Bot"
 task = "workflow.run"
 args = "Dashboard"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Tradier Smoke Test"
+
 [[workflows.workflow]]
 name = "Trading Bot"
 author = "agent"
@@ -44,6 +48,17 @@ waitForPort = 5000
 
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow]]
+name = "Tradier Smoke Test"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python tradier_smoketest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [userenv]
 

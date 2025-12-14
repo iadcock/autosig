@@ -1,0 +1,53 @@
+You are the builder of AutoSig. Implement Tradier connectivity in this Replit project.
+
+Locked scope:
+- Primary broker for v1 execution: Tradier
+- Supported assets in v1: US stocks, ETFs, SPX options (index options)
+- Out of scope: crypto, futures
+- Execution modes: LIVE (Tradier), PAPER (internal sim), HISTORICAL (internal replay)
+- For this prompt: focus ONLY on Tradier LIVE connectivity + proof orders.
+
+Secrets (already in Replit):
+- TRADIER_TOKEN = (sandbox token)
+- TRADIER_BASE_URL = https://sandbox.tradier.com (or provided base url)
+- TRADIER_ACCOUNT_ID = (if needed)
+
+Create file: tradier_client.py
+Requirements:
+1) Use requests. Build a small Tradier client with:
+   - get_accounts()
+   - get_account_balance(account_id)
+   - get_positions(account_id)
+   - quote(symbol)
+   - option_chain(underlying="SPX", expiration="YYYY-MM-DD")
+   - place_stock_order(account_id, symbol, side, quantity, order_type="market"|"limit", limit_price=None, tif="day")
+   - place_option_order_single_leg(account_id, underlying, expiration, strike, option_type="C"|"P", side, quantity, order_type="market"|"limit", limit_price=None, tif="day")
+
+2) Tradier headers:
+   - Authorization: Bearer <TRADIER_TOKEN>
+   - Accept: application/json
+
+3) Implement robust error handling:
+   - Log HTTP status codes and a short response excerpt on failure
+   - Raise a clean exception or return a structured error object
+
+4) Add a script: tradier_smoketest.py
+This script should:
+   - Fetch accounts and print them
+   - Pick the first account_id unless TRADIER_ACCOUNT_ID is set
+   - Fetch and print balance + positions
+   - Fetch and print a quote for SPY
+   - Fetch SPX option expirations if available (or use a provided expiration)
+   - Fetch and print a small portion of SPX option chain (calls only, near ATM strikes)
+   - Place a dummy paper/sandbox stock order:
+       buy 1 share of SPY (market) OR a limit far away if sandbox requires
+   - Place a dummy single-leg SPX option order if sandbox supports it
+     (If sandbox blocks SPX options, still show that the order payload is correct and log the response.)
+
+5) Do not implement spreads yet. Single-leg options only.
+
+Deliverables:
+- tradier_client.py
+- tradier_smoketest.py
+- Update requirements.txt if needed
+- Clear console output so I can verify it works in Replit by clicking Run.
