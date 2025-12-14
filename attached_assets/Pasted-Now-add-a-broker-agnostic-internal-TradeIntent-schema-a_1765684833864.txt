@@ -1,0 +1,69 @@
+Now add a broker-agnostic internal TradeIntent schema and execution routing.
+
+Locked architecture:
+- Brokers do NOT handle historical trading; paper + historical must be internal.
+- Therefore ALL parsed signals must become a TradeIntent first, then be routed to:
+  - TradierExecutor for LIVE
+  - PaperExecutor for PAPER
+  - HistoricalExecutor for HISTORICAL (stub only)
+
+Implement:
+
+1) Create models.py (or trade_intent.py) with Pydantic models or dataclasses:
+
+TradeIntent:
+- id (uuid)
+- created_at (iso timestamp)
+- execution_mode: "live" | "paper" | "historical"
+- instrument_type: "stock" | "option" | "index_option"
+- underlying: str
+- symbol: str | None   (for stock, symbol==underlying; for options, optional)
+- action: "open" | "close"
+- order_type: "market" | "limit"
+- limit_price: float | None
+- limit_min: float | None
+- limit_max: float | None
+- quantity: int
+- risk_pct: float | None
+- legs: list[OptionLeg]  (empty for stock; length 1 for single-leg options in v1; later can be 2+)
+
+OptionLeg:
+- side: "BUY" | "SELL"
+- option_type: "CALL" | "PUT"
+- expiration: "YYYY-MM-DD"
+- strike: float
+- quantity: int
+
+2) Create executors:
+- executors/tradier_executor.py
+  - execute(trade_intent: TradeIntent) -> ExecutionResult
+  - Map TradeIntent to Tradier API calls using tradier_client.py
+  - For now: support stock orders and single-leg SPX options orders
+
+- executors/paper_executor.py
+  - execute(trade_intent) -> ExecutionResult (STUB)
+  - Return a simulated fill result with placeholders (no pricing engine yet)
+  - Log that this is simulated
+
+- executors/historical_executor.py
+  - execute(trade_intent) -> ExecutionResult (STUB)
+  - Return a mock result and log that historical replay is not implemented yet
+
+ExecutionResult model:
+- status: "filled" | "submitted" | "rejected" | "simulated"
+- broker: "tradier" | "paper" | "historical"
+- order_id: str | None
+- message: str
+- submitted_payload: dict | None
+
+3) Create router:
+- execution/router.py
+  - execute_trade(trade_intent) routes to the correct executor by execution_mode
+
+4) Add a tiny demo script: trade_intent_demo.py
+- Create one TradeIntent for a stock (SPY buy 1 market)
+- Create one TradeIntent for an SPX single-leg option (1 contract)
+- Run each in PAPER mode (should simulate)
+- Run in LIVE mode only if LIVE_TRADING=true env var, otherwise log and skip.
+
+Do not change any Whop scraping/parsing yet in this prompt. This is only internal schema + execution plumbing.
