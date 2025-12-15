@@ -201,7 +201,10 @@ The dashboard includes smoke test buttons for each broker:
 
 **Alpaca Test** (paper trading):
 - GET account info, market clock, AAPL asset
-- POST test order (1 share AAPL market)
+- BUY 1 share AAPL (market order)
+- Confirm position exists
+- SELL 1 share AAPL (market order)
+- Confirm position closed
 - GET recent orders
 
 **Tradier Test** (sandbox):
@@ -209,6 +212,8 @@ The dashboard includes smoke test buttons for each broker:
 - GET SPY quote
 - GET option expirations (SPX, fallback to SPY)
 - GET option chain
+- BUY 1 share SPY (if sandbox supports)
+- Confirm position, SELL, confirm closed
 
 Required secrets:
 - Alpaca: `ALPACA_API_KEY`, `ALPACA_API_SECRET`

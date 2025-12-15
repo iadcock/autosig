@@ -1,0 +1,99 @@
+EXTEND the existing Broker Smoke Test dashboard to include BOTH BUY and SELL actions during each broker test.
+
+IMPORTANT SAFETY RULES:
+- All trades must be PAPER or SANDBOX only.
+- Quantities must be minimal (1 share or 1 contract).
+- A SELL must ONLY attempt to close a position created earlier in the SAME test run.
+- If selling is not allowed or fails, mark the step as failed/skipped but DO NOT crash.
+
+────────────────────────────────
+ALPACA (PAPER) — BUY + SELL FLOW
+────────────────────────────────
+In alpaca_smoke_test():
+
+Add the following steps AFTER the existing BUY test:
+
+1) BUY STEP (already exists, keep it):
+   - POST /v2/orders
+   - Buy 1 share of AAPL (market, day)
+
+2) CONFIRM POSITION:
+   - GET /v2/positions/AAPL
+   - If position exists, record quantity and avg_entry_price
+   - If not found, mark failure and skip SELL
+
+3) SELL STEP:
+   - POST /v2/orders
+   - Sell the SAME quantity of AAPL (market, day)
+   - Record order_id and status
+
+4) CONFIRM CLOSE:
+   - GET /v2/positions/AAPL
+   - If position no longer exists OR qty == 0 → OK
+   - Otherwise → FAIL with summary "Position not fully closed"
+
+Each step must be appended to the steps[] array with:
+- name
+- ok
+- status
+- summary
+- details (optional)
+
+If Alpaca rejects the SELL (rare in paper), mark step as failed and include response excerpt.
+
+────────────────────────────────
+TRADIER — BUY + SELL FLOW (CONDITIONAL)
+────────────────────────────────
+In tradier_smoke_test():
+
+1) BUY STEP:
+   - Attempt a minimal stock BUY (e.g., 1 share SPY) if:
+     - account_id is known
+     - order endpoint is available
+   - If not available, mark as SKIPPED with reason.
+
+2) CONFIRM POSITION:
+   - Fetch positions
+   - Verify the symbol appears with quantity > 0
+
+3) SELL STEP:
+   - Attempt to SELL the SAME quantity of the SAME symbol
+   - Use market or limit depending on sandbox rules
+
+4) CONFIRM CLOSE:
+   - Fetch positions again
+   - Verify the position is closed or quantity reduced to zero
+
+If Tradier sandbox does NOT allow trading:
+- Mark BUY/SELL steps as SKIPPED (not failed)
+- Clearly state "Sandbox does not support order placement yet"
+
+────────────────────────────────
+UI / RESULTS REQUIREMENTS (UNCHANGED)
+────────────────────────────────
+- Button animation still based on overall success boolean:
+  success = true only if ALL required (non-skipped) steps pass
+- Results table must show BUY and SELL steps clearly
+- Skipped steps should show:
+  OK = false
+  Status = "SKIPPED"
+  Summary explaining why
+
+────────────────────────────────
+SUCCESS CRITERIA
+────────────────────────────────
+After this change, clicking a broker test button should clearly show:
+- Auth success
+- Market/data access
+- BUY order submitted
+- Position confirmed
+- SELL order submitted
+- Position closed (or explicit skip with explanation)
+
+This confirms end-to-end execution, not just connectivity.
+
+Do NOT add new secrets.
+Do NOT enable live trading accidentally.
+Do NOT increase order sizes.
+
+Extend the existing implementation cleanly.
