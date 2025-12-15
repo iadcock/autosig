@@ -196,6 +196,24 @@ python report_docx.py --hours 48   # Custom hours
 - "Generate Last 24 Hours Report" button
 - Reports saved to `reports/whop_trade_report_<timestamp>.docx`
 
+### Broker Smoke Test Dashboard
+The dashboard includes smoke test buttons for each broker:
+
+**Alpaca Test** (paper trading):
+- GET account info, market clock, AAPL asset
+- POST test order (1 share AAPL market)
+- GET recent orders
+
+**Tradier Test** (sandbox):
+- GET profile/account info
+- GET SPY quote
+- GET option expirations (SPX, fallback to SPY)
+- GET option chain
+
+Required secrets:
+- Alpaca: `ALPACA_API_KEY`, `ALPACA_API_SECRET`
+- Tradier: `TRADIER_TOKEN`, `TRADIER_ACCOUNT_ID` (optional)
+
 ### Report Contents
 - Summary metrics (total alerts, signals, executions, skips)
 - Table of all trading signals parsed

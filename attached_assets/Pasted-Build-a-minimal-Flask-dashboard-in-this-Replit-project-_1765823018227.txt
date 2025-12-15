@@ -1,0 +1,142 @@
+Build a minimal Flask dashboard in this Replit project that has ONE BUTTON PER BROKER to run broker smoke tests, with clear Success/Failed button animations and a results table.
+
+BROKERS TO TEST:
+- Alpaca (paper) — should be testable immediately
+- Tradier (sandbox/live) — may be pending verification; still test data endpoints if available
+
+REQUIRED UX (IMPORTANT):
+Each broker button MUST visually transition through 3 states:
+1) Idle: normal button text “Run Alpaca Test” / “Run Tradier Test”
+2) Running: button disabled + spinner animation + text “Testing…”
+3) Result:
+   - Success: button turns GREEN with a checkmark “✓ Success”
+   - Failed: button turns RED with an X “✗ Failed”
+After completion, the button re-enables and results render below.
+
+DO NOT use React. Use simple HTML/CSS/JS + Flask JSON endpoints.
+
+────────────────────────────────
+ENV / SECRETS (read from Replit Secrets)
+────────────────────────────────
+Alpaca:
+- ALPACA_API_KEY
+- ALPACA_API_SECRET
+- ALPACA_PAPER_BASE_URL (default to https://paper-api.alpaca.markets if missing)
+
+Tradier:
+- TRADIER_TOKEN
+- TRADIER_BASE_URL (default to https://sandbox.tradier.com if missing)
+- TRADIER_ACCOUNT_ID (optional)
+
+────────────────────────────────
+DELIVERABLES / FILES
+────────────────────────────────
+1) Create `broker_smoke_tests.py`
+- Implement:
+  - alpaca_smoke_test() -> dict
+  - tradier_smoke_test() -> dict
+Return format MUST be:
+{
+  "broker": "<alpaca|tradier>",
+  "success": true/false,
+  "timestamp": "<iso>",
+  "steps": [
+    { "name": "...", "ok": true/false, "status": 200, "summary": "short human readable", "details": "optional short excerpt" }
+  ]
+}
+
+Each test must:
+- Use requests with explicit timeouts (10–15s per call)
+- Catch and report:
+  - requests.exceptions.Timeout
+  - requests.exceptions.RequestException
+- Never crash the app; always return a dict.
+
+2) Alpaca smoke test steps (paper trading):
+A) GET {base}/v2/account
+B) GET {base}/v2/clock
+C) GET {base}/v2/assets/AAPL
+D) POST {base}/v2/orders to buy 1 share AAPL (paper)
+   body:
+   { "symbol":"AAPL","qty":1,"side":"buy","type":"market","time_in_force":"day" }
+E) GET {base}/v2/orders?status=all&limit=5
+
+Headers:
+APCA-API-KEY-ID: <ALPACA_API_KEY>
+APCA-API-SECRET-KEY: <ALPACA_API_SECRET>
+
+For each step:
+- record ok/status/summary
+- on failure include first 200 chars of response text in details.
+
+3) Tradier smoke test steps:
+A) Determine account_id:
+   - Use TRADIER_ACCOUNT_ID if provided, else attempt GET {base}/v1/user/profile (or accounts endpoint) and select the first account.
+B) Quote SPY:
+   GET {base}/v1/markets/quotes?symbols=SPY
+C) Option expirations:
+   Try SPX:
+     GET {base}/v1/markets/options/expirations?symbol=SPX
+   If SPX fails, fallback to SPY.
+D) Option chain:
+   Use the nearest expiration from (C)
+   Try SPX:
+     GET {base}/v1/markets/options/chains?symbol=SPX&expiration=<nearest>
+   If SPX fails, fallback to SPY.
+E) Order placement:
+   If sandbox/live supports it AND account_id is known, attempt a harmless test order;
+   otherwise mark step as ok=false with summary "Skipped: order placement not available yet" (do not crash).
+
+Headers:
+Authorization: Bearer <TRADIER_TOKEN>
+Accept: application/json
+
+4) Create/modify `app.py` (Flask)
+Routes:
+- GET /health -> returns "ok"
+- GET / -> serves a simple page with 2 buttons:
+    [Run Alpaca Test]
+    [Run Tradier Test]
+  and a <div id="results"></div> area below.
+- POST /test/alpaca -> returns JSON result of alpaca_smoke_test()
+- POST /test/tradier -> returns JSON result of tradier_smoke_test()
+
+IMPORTANT:
+- /test/* endpoints must return JSON, not HTML.
+- The front-end JS will render the table from JSON.
+
+5) Frontend (inline HTML/CSS/JS is fine)
+- Include CSS classes:
+  - .running (grey, disabled look)
+  - .success (green)
+  - .failure (red)
+  - .spinner (CSS spinning animation)
+- JS function runTest(broker) that:
+  - Sets button to running state + spinner
+  - Calls POST /test/<broker>
+  - Reads JSON response { success, steps }
+  - Sets button to green success or red failure
+  - Renders a results table with columns:
+    Step | OK | Status | Summary | Details
+  - Handles network errors and marks failure state
+
+6) requirements.txt
+Ensure it contains:
+- flask
+- requests
+
+7) README update (brief)
+Add “Broker Smoke Test Dashboard” section:
+- what it is
+- which secrets are required
+- how to run
+- what success looks like
+
+────────────────────────────────
+SAFETY / QUALITY RULES
+────────────────────────────────
+- Never print or return secret values (tokens/keys) in responses.
+- Always include timeouts.
+- Keep response excerpts short (<= 200 chars).
+- Make logs readable but not noisy.
+- The dashboard should work in Replit: run app.py, click buttons, see animations + results.
