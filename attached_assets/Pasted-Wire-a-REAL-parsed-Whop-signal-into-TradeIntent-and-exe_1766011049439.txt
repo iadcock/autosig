@@ -1,0 +1,127 @@
+Wire a REAL parsed Whop signal into TradeIntent and execute it in PAPER mode (internal simulator).
+
+Context:
+- We already fetch Whop alerts, parse them, and write logs:
+  logs/alerts_raw.jsonl
+  logs/alerts_parsed.jsonl
+  logs/execution_plan.jsonl
+- We already have (or are building) a TradeIntent model and execution router.
+- Tradier sandbox is validated, but this task is PAPER mode only.
+- v1 supported assets: US stocks/ETFs + SPX options (single-leg first, spreads later).
+- This task: take a REAL parsed signal, convert to TradeIntent, and run PaperExecutor.
+
+GOAL:
+Add a new dashboard button:
+[Execute Last Parsed SIGNAL (Paper)]
+When clicked, the app will:
+1) Load the most recent parsed signal from logs/alerts_parsed.jsonl where classification == "SIGNAL"
+2) Convert it to a TradeIntent
+3) Call execute_trade(trade_intent) with execution_mode="paper"
+4) Save the execution result + plan to logs/execution_plan.jsonl
+5) Return a JSON payload to the UI showing:
+   - the selected alert excerpt
+   - parsed signal fields
+   - resulting TradeIntent
+   - simulated execution result
+
+REQUIREMENTS:
+
+A) Create file: signal_to_intent.py
+Implement:
+- build_trade_intent(parsed_signal: dict, execution_mode="paper") -> TradeIntent
+
+Mapping rules (v1):
+1) STOCK LONG (if parsed_signal.strategy == "LONG_STOCK" or instrument_type == stock)
+   - instrument_type = "stock"
+   - underlying = ticker
+   - action = "open" unless parsed_signal indicates exit/close
+   - quantity: use parsed quantity, else default 1
+   - order_type: "limit" if limit exists else "market"
+   - limit_price: use parsed limit if present
+   - legs = []
+
+2) SINGLE-LEG OPTION (if parsed_signal has one option leg)
+   - instrument_type = "index_option" if underlying == "SPX" else "option"
+   - underlying = parsed ticker/underlying
+   - legs length 1:
+       side BUY/SELL
+       option_type CALL/PUT
+       expiration YYYY-MM-DD
+       strike float
+       quantity int
+   - order_type "limit" if limit exists else "market"
+   - limit_price: choose conservative execution price:
+       - debit -> use limit_max
+       - credit -> use limit_min
+     (if only one limit given, use that)
+   - action open/close based on parsed intent (keywords: exit/close/take profits)
+
+3) SPREADS:
+   - If parsed_signal has 2 legs (spread) but we don’t support executing spreads yet,
+     still build a TradeIntent with legs[2], but PaperExecutor should simulate it.
+     TradierExecutor should NOT run spreads yet (paper only is OK).
+   - In build_trade_intent(), set instrument_type = "index_option" for SPX spreads.
+   - order_type should be limit, and limit_price should be:
+       debit spread: limit_max
+       credit spread: limit_min
+
+B) Update/confirm TradeIntent + ExecutionResult exist:
+- TradeIntent with fields described earlier (uuid, created_at, execution_mode, instrument_type, underlying, action, order_type, limit_price, quantity, risk_pct, legs[])
+- ExecutionResult with status, broker, order_id, message, submitted_payload
+
+C) PaperExecutor behavior (internal sim):
+In executors/paper_executor.py:
+- execute(trade_intent) returns ExecutionResult with:
+  status="simulated"
+  broker="paper"
+  order_id = "paper_<uuid>"
+  message includes a short fill summary
+  submitted_payload includes the TradeIntent as dict
+- For now, simulate fills deterministically:
+  - market -> filled at "simulated_mid" placeholder
+  - limit -> filled at the limit_price
+- For spreads, treat limit_price as net debit/credit fill
+- Do NOT require market data
+
+D) Add a loggable execution plan:
+Create function build_execution_plan(trade_intent, execution_result, source_post_id) -> dict
+Append to logs/execution_plan.jsonl with:
+- ts_iso
+- post_id
+- action ("PLACE_ORDER" or "SKIP")
+- reason (if skip)
+- order_preview (trade_intent dict)
+- result (execution_result dict)
+- execution_mode ("paper")
+
+E) Add dashboard button + endpoint:
+In app.py:
+- Add button on "/" page: "Execute Last Parsed SIGNAL (Paper)"
+- Add POST endpoint: /execute/paper/last_signal
+  It should:
+  1) Read logs/alerts_parsed.jsonl from bottom up
+  2) Find latest entry with classification == "SIGNAL" and parsed_signal not null
+  3) Build TradeIntent via build_trade_intent(parsed_signal, execution_mode="paper")
+  4) Execute via router.execute_trade(trade_intent)
+  5) Log execution plan into logs/execution_plan.jsonl
+  6) Return JSON to UI including:
+     selected_post_id
+     raw_excerpt
+     parsed_signal
+     trade_intent
+     execution_result
+
+If no SIGNAL exists:
+- Return JSON success=false with message "No parsed signals found"
+
+F) UI:
+- After clicking, show a panel with:
+  - Signal excerpt
+  - Parsed fields
+  - TradeIntent (pretty JSON)
+  - ExecutionResult (pretty JSON)
+- Button should show running → success/fail animations like other buttons.
+
+Do NOT change Whop fetching.
+Do NOT change report generation in this prompt.
+Just wire parsed signal → TradeIntent → paper execute + UI button + execution log.

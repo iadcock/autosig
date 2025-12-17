@@ -3,9 +3,9 @@ Paper executor for simulated trade execution.
 """
 
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional
-import random
 
 from trade_intent import TradeIntent, ExecutionResult
 from .base import BaseExecutor
@@ -49,28 +49,21 @@ class PaperExecutor(BaseExecutor):
             )
         
         self._order_counter += 1
-        order_id = f"PAPER-{self._order_counter:06d}"
+        order_id = f"paper_{uuid.uuid4().hex[:8]}"
         
         fill_price = self._calculate_fill_price(intent)
+        fill_summary = self._build_fill_summary(intent, fill_price)
         
-        logger.info(f"[PAPER] Simulated fill for {intent.underlying}: "
-                    f"{intent.action} {intent.quantity} @ ${fill_price:.2f}")
+        logger.info(f"[PAPER] {fill_summary}")
         
-        payload = {
-            "underlying": intent.underlying,
-            "action": intent.action,
-            "quantity": intent.quantity,
-            "order_type": intent.order_type,
-            "limit_price": intent.get_effective_limit_price(),
-            "instrument_type": intent.instrument_type
-        }
+        payload = self._build_submitted_payload(intent)
         
         return ExecutionResult(
             intent_id=intent.id,
             status="SIMULATED",
             broker=self.broker_name,
             order_id=order_id,
-            message=f"Paper trade simulated - filled at ${fill_price:.2f}",
+            message=fill_summary,
             fill_price=fill_price,
             filled_quantity=intent.quantity,
             filled_at=datetime.utcnow(),
@@ -82,15 +75,74 @@ class PaperExecutor(BaseExecutor):
         Calculate simulated fill price.
         
         For limit orders, uses the limit price.
-        For market orders, simulates a price based on limit_min/limit_max if available.
+        For market orders, uses a simulated mid price.
+        For spreads, uses net debit/credit.
         """
         if intent.order_type == "LIMIT" and intent.limit_price:
             return intent.limit_price
         
-        if intent.limit_min is not None and intent.limit_max is not None:
-            return round(random.uniform(intent.limit_min, intent.limit_max), 2)
+        if intent.limit_max is not None and intent.limit_max > 0:
+            return intent.limit_max
+        
+        if intent.limit_min is not None and intent.limit_min > 0:
+            return intent.limit_min
         
         if intent.limit_price:
             return intent.limit_price
         
-        return 100.00
+        if intent.instrument_type == "STOCK":
+            return 100.00
+        elif intent.instrument_type == "SPREAD":
+            return 1.50
+        else:
+            return 2.50
+    
+    def _build_fill_summary(self, intent: TradeIntent, fill_price: float) -> str:
+        """Build a human-readable fill summary."""
+        if intent.instrument_type == "STOCK":
+            return f"Simulated {intent.action} {intent.quantity} shares of {intent.underlying} @ ${fill_price:.2f}"
+        
+        elif intent.instrument_type == "SPREAD":
+            leg_count = len(intent.legs)
+            net_type = "debit" if intent.action in ["BUY", "BUY_TO_OPEN"] else "credit"
+            legs_desc = []
+            for leg in intent.legs:
+                legs_desc.append(f"{leg.side} {leg.strike}{leg.option_type[0]} {leg.expiration}")
+            legs_str = " / ".join(legs_desc) if legs_desc else f"{leg_count}-leg spread"
+            return f"Simulated {intent.underlying} {legs_str} for ${fill_price:.2f} {net_type}"
+        
+        else:
+            if intent.legs:
+                leg = intent.legs[0]
+                return f"Simulated {intent.action} {intent.quantity}x {intent.underlying} {leg.strike}{leg.option_type[0]} {leg.expiration} @ ${fill_price:.2f}"
+            return f"Simulated {intent.action} {intent.quantity}x {intent.underlying} option @ ${fill_price:.2f}"
+    
+    def _build_submitted_payload(self, intent: TradeIntent) -> dict:
+        """Build the submitted payload for logging."""
+        payload = {
+            "intent_id": intent.id,
+            "underlying": intent.underlying,
+            "action": intent.action,
+            "quantity": intent.quantity,
+            "order_type": intent.order_type,
+            "limit_price": intent.get_effective_limit_price(),
+            "instrument_type": intent.instrument_type,
+            "execution_mode": intent.execution_mode,
+        }
+        
+        if intent.legs:
+            payload["legs"] = [
+                {
+                    "side": leg.side,
+                    "quantity": leg.quantity,
+                    "strike": leg.strike,
+                    "option_type": leg.option_type,
+                    "expiration": leg.expiration
+                }
+                for leg in intent.legs
+            ]
+        
+        if intent.metadata:
+            payload["metadata"] = intent.metadata
+        
+        return payload

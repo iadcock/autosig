@@ -9,6 +9,9 @@ from flask import Flask, send_file, render_template_string, request, jsonify
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
 from env_loader import diagnose_env
+from signal_to_intent import build_trade_intent
+from execution_plan import build_execution_plan, log_execution_plan, get_latest_signal_entry
+from execution.router import execute_trade
 
 app = Flask(__name__)
 
@@ -253,6 +256,17 @@ HTML_TEMPLATE = """
         <div id="results-alpaca" class="results-container" style="display: none;"></div>
         <div id="results-tradier" class="results-container" style="display: none;"></div>
         
+        <h2>Paper Trading</h2>
+        <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+            Execute the last parsed signal in paper (simulated) mode.
+        </p>
+        
+        <button id="btn-paper-execute" class="btn btn-test" onclick="executePaperSignal()">
+            Execute Last Parsed Signal (Paper)
+        </button>
+        
+        <div id="results-paper" class="results-container" style="display: none;"></div>
+        
         <div class="info">
             <h3>Report Contents</h3>
             <ul>
@@ -383,6 +397,109 @@ HTML_TEMPLATE = """
             `;
             resultsDiv.style.display = 'block';
         }
+        
+        function executePaperSignal() {
+            const btn = document.getElementById('btn-paper-execute');
+            const resultsDiv = document.getElementById('results-paper');
+            
+            btn.disabled = true;
+            btn.className = 'btn btn-test running';
+            btn.innerHTML = '<span class="spinner"></span>Executing...';
+            resultsDiv.style.display = 'none';
+            
+            fetch('/execute/paper/last_signal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    btn.className = 'btn btn-test success';
+                    btn.innerHTML = '✓ Executed';
+                } else {
+                    btn.className = 'btn btn-test failure';
+                    btn.innerHTML = '✗ Failed';
+                }
+                
+                renderPaperResults(data);
+                
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.className = 'btn btn-test';
+                    btn.innerHTML = 'Execute Last Parsed Signal (Paper)';
+                }, 3000);
+            })
+            .catch(error => {
+                btn.className = 'btn btn-test failure';
+                btn.innerHTML = '✗ Error';
+                
+                resultsDiv.innerHTML = `
+                    <div class="info" style="background: #f8d7da; border: 1px solid #f5c6cb;">
+                        <h3 style="color: #721c24;">Network Error</h3>
+                        <p style="color: #721c24;">${error.message}</p>
+                    </div>
+                `;
+                resultsDiv.style.display = 'block';
+                
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.className = 'btn btn-test';
+                    btn.innerHTML = 'Execute Last Parsed Signal (Paper)';
+                }, 2000);
+            });
+        }
+        
+        function renderPaperResults(data) {
+            const resultsDiv = document.getElementById('results-paper');
+            
+            if (!data.success) {
+                resultsDiv.innerHTML = `
+                    <div class="info" style="background: #f8d7da; border: 1px solid #f5c6cb;">
+                        <h3 style="color: #721c24;">Execution Failed</h3>
+                        <p style="color: #721c24;">${data.message}</p>
+                    </div>
+                `;
+                resultsDiv.style.display = 'block';
+                return;
+            }
+            
+            const statusClass = data.execution_result?.status === 'SIMULATED' ? 'step-ok' : 'step-fail';
+            const statusText = data.execution_result?.status || 'UNKNOWN';
+            
+            resultsDiv.innerHTML = `
+                <div class="results-header">
+                    <h4>Paper Execution: <span class="${statusClass}">${statusText}</span></h4>
+                    <span class="results-timestamp">${data.timestamp || ''}</span>
+                </div>
+                
+                <div class="info" style="margin-top: 10px;">
+                    <h3>Signal Excerpt</h3>
+                    <p style="font-family: monospace; white-space: pre-wrap; font-size: 12px; background: #f0f0f0; padding: 10px; border-radius: 4px; max-height: 100px; overflow-y: auto;">${escapeHtml(data.raw_excerpt || '')}</p>
+                </div>
+                
+                <div class="info" style="margin-top: 10px;">
+                    <h3>Parsed Signal</h3>
+                    <pre style="font-size: 11px; background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto;">${JSON.stringify(data.parsed_signal || {}, null, 2)}</pre>
+                </div>
+                
+                <div class="info" style="margin-top: 10px;">
+                    <h3>Trade Intent</h3>
+                    <pre style="font-size: 11px; background: #e8f4e8; padding: 10px; border-radius: 4px; overflow-x: auto;">${JSON.stringify(data.trade_intent || {}, null, 2)}</pre>
+                </div>
+                
+                <div class="info" style="margin-top: 10px;">
+                    <h3>Execution Result</h3>
+                    <pre style="font-size: 11px; background: #e8e8f4; padding: 10px; border-radius: 4px; overflow-x: auto;">${JSON.stringify(data.execution_result || {}, null, 2)}</pre>
+                </div>
+            `;
+            resultsDiv.style.display = 'block';
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
     </script>
 </body>
 </html>
@@ -450,6 +567,97 @@ def debug_env():
     ]
     result = diagnose_env(keys_to_check)
     return jsonify(result)
+
+
+@app.route("/execute/paper/last_signal", methods=["POST"])
+def execute_paper_last_signal():
+    """
+    Execute the last parsed signal in paper (simulated) mode.
+    
+    1. Reads logs/alerts_parsed.jsonl from bottom up
+    2. Finds latest entry with classification == "SIGNAL"
+    3. Builds TradeIntent via build_trade_intent()
+    4. Executes via router.execute_trade()
+    5. Logs execution plan to logs/execution_plan.jsonl
+    6. Returns JSON with results
+    """
+    from datetime import datetime
+    
+    signal_entry = get_latest_signal_entry()
+    
+    if not signal_entry:
+        return jsonify({
+            "success": False,
+            "message": "No parsed signals found in logs/alerts_parsed.jsonl",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+    
+    parsed_signal = signal_entry.get("parsed_signal", {})
+    post_id = signal_entry.get("post_id", "unknown")
+    raw_excerpt = signal_entry.get("raw_excerpt", "")
+    
+    try:
+        trade_intent = build_trade_intent(parsed_signal, execution_mode="PAPER")
+        
+        execution_result = execute_trade(trade_intent)
+        
+        execution_plan = build_execution_plan(
+            trade_intent=trade_intent,
+            execution_result=execution_result,
+            source_post_id=post_id,
+            action="PLACE_ORDER"
+        )
+        log_execution_plan(execution_plan)
+        
+        intent_dict = {
+            "id": trade_intent.id,
+            "execution_mode": trade_intent.execution_mode,
+            "instrument_type": trade_intent.instrument_type,
+            "underlying": trade_intent.underlying,
+            "action": trade_intent.action,
+            "order_type": trade_intent.order_type,
+            "limit_price": trade_intent.limit_price,
+            "quantity": trade_intent.quantity,
+            "legs": [
+                {
+                    "side": leg.side,
+                    "quantity": leg.quantity,
+                    "strike": leg.strike,
+                    "option_type": leg.option_type,
+                    "expiration": leg.expiration
+                }
+                for leg in trade_intent.legs
+            ]
+        }
+        
+        result_dict = {
+            "status": execution_result.status,
+            "broker": execution_result.broker,
+            "order_id": execution_result.order_id,
+            "message": execution_result.message,
+            "fill_price": execution_result.fill_price,
+            "filled_quantity": execution_result.filled_quantity
+        }
+        
+        return jsonify({
+            "success": True,
+            "selected_post_id": post_id,
+            "raw_excerpt": raw_excerpt[:500],
+            "parsed_signal": parsed_signal,
+            "trade_intent": intent_dict,
+            "execution_result": result_dict,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Execution error: {str(e)}",
+            "selected_post_id": post_id,
+            "raw_excerpt": raw_excerpt[:200],
+            "parsed_signal": parsed_signal,
+            "timestamp": datetime.utcnow().isoformat()
+        })
 
 
 if __name__ == "__main__":

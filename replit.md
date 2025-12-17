@@ -6,6 +6,22 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-17: Wired parsed Whop signals to TradeIntent with paper execution
+  - New module: signal_to_intent.py converts ParsedSignal → TradeIntent
+  - New module: execution_plan.py for logging execution plans to JSONL
+  - Enhanced PaperExecutor with detailed fill summaries for stocks, options, and spreads
+  - Dashboard button: "Execute Last Parsed Signal (Paper)"
+  - Endpoint: POST /execute/paper/last_signal
+  - Logs execution plans to logs/execution_plan.jsonl
+  - EXIT signals correctly map to BUY_TO_CLOSE for credit spreads
+- 2024-12-17: Updated Tradier smoke test for sandbox limitations
+  - Auto-detects sandbox mode from TRADIER_BASE_URL
+  - Position confirmation steps marked as SKIPPED_SANDBOX (not failures)
+  - UI shows ⚠️ for sandbox-limited steps
+  - Success based only on required steps (auth, quotes, expirations, chain, BUY order)
+- 2024-12-17: Added centralized env_loader.py for reliable secret detection
+  - Checks os.getenv() → REPLIT_* prefixed → config_local.py fallback
+  - Debug endpoint: GET /debug/env (shows detection status, not values)
 - 2024-12-14: Added broker-agnostic TradeIntent schema and execution routing
   - TradeIntent model: Broker-independent trade representation
   - ExecutionResult model: Unified execution outcome
@@ -53,6 +69,9 @@ An automated trading bot that processes options trade alerts from Whop and execu
 | `tradier_client.py` | Tradier API client |
 | `executors/` | Trade executors (tradier, paper, historical) |
 | `execution/router.py` | Execution routing by mode |
+| `signal_to_intent.py` | Converts ParsedSignal to TradeIntent |
+| `execution_plan.py` | Builds and logs execution plans |
+| `env_loader.py` | Centralized environment variable loader |
 
 ### Data Flow
 
