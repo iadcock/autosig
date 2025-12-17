@@ -8,6 +8,7 @@ from flask import Flask, send_file, render_template_string, request, jsonify
 
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
+from env_loader import diagnose_env
 
 app = Flask(__name__)
 
@@ -416,6 +417,24 @@ def test_alpaca():
 def test_tradier():
     """Run Tradier smoke test and return JSON results."""
     result = tradier_smoke_test()
+    return jsonify(result)
+
+
+@app.route("/debug/env")
+def debug_env():
+    """
+    Diagnostic endpoint to check environment variable visibility.
+    Does NOT expose actual secret values.
+    """
+    keys_to_check = [
+        "TRADIER_TOKEN",
+        "TRADIER_BASE_URL",
+        "TRADIER_ACCOUNT_ID",
+        "ALPACA_API_KEY",
+        "ALPACA_API_SECRET",
+        "ALPACA_PAPER_BASE_URL"
+    ]
+    result = diagnose_env(keys_to_check)
     return jsonify(result)
 
 

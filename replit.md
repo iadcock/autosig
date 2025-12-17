@@ -219,6 +219,13 @@ Required secrets:
 - Alpaca: `ALPACA_API_KEY`, `ALPACA_API_SECRET`
 - Tradier: `TRADIER_TOKEN`, `TRADIER_ACCOUNT_ID` (optional)
 
+Environment variable sources (checked in order):
+1. os.getenv() - Workspace Secrets
+2. REPLIT_* prefixed - Deployment env
+3. config_local.py - Optional local fallback (gitignored)
+
+Debug endpoint: GET /debug/env - Shows which env vars are detected (no values exposed)
+
 ### Report Contents
 - Summary metrics (total alerts, signals, executions, skips)
 - Table of all trading signals parsed

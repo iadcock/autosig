@@ -15,6 +15,8 @@ from typing import Optional
 
 import requests
 
+from env_loader import load_env, get_checked_sources
+
 logger = logging.getLogger(__name__)
 
 TIMEOUT = 15
@@ -81,22 +83,23 @@ def alpaca_smoke_test() -> dict:
     Returns:
         dict with broker, success, timestamp, and steps
     """
-    api_key = os.getenv("ALPACA_API_KEY", "")
-    api_secret = os.getenv("ALPACA_API_SECRET", "")
-    base_url = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
+    api_key = load_env("ALPACA_API_KEY") or ""
+    api_secret = load_env("ALPACA_API_SECRET") or ""
+    base_url = load_env("ALPACA_PAPER_BASE_URL") or "https://paper-api.alpaca.markets"
     
     steps = []
     can_sell = False
     baseline_qty = 0
     test_qty = 1
     
+    checked = ", ".join(get_checked_sources())
     if not api_key or not api_secret:
         steps.append(_make_step(
             "Auth Check",
             False,
             0,
             "Missing ALPACA_API_KEY or ALPACA_API_SECRET",
-            "Please set both secrets in the Replit Secrets tab"
+            f"Checked: {checked}. Use /debug/env to inspect."
         ))
         return {
             "broker": "alpaca",
@@ -308,9 +311,9 @@ def tradier_smoke_test() -> dict:
     Returns:
         dict with broker, success, timestamp, and steps
     """
-    token = os.getenv("TRADIER_TOKEN", "")
-    base_url = os.getenv("TRADIER_BASE_URL", "https://sandbox.tradier.com")
-    account_id = os.getenv("TRADIER_ACCOUNT_ID", "")
+    token = load_env("TRADIER_TOKEN") or ""
+    base_url = load_env("TRADIER_BASE_URL") or "https://sandbox.tradier.com"
+    account_id = load_env("TRADIER_ACCOUNT_ID") or ""
     
     steps = []
     can_trade = False
@@ -319,13 +322,14 @@ def tradier_smoke_test() -> dict:
     test_qty = 1
     trade_symbol = "SPY"
     
+    checked = ", ".join(get_checked_sources())
     if not token:
         steps.append(_make_step(
             "Auth Check",
             False,
             0,
             "Missing TRADIER_TOKEN",
-            "Please set TRADIER_TOKEN in the Replit Secrets tab"
+            f"Checked: {checked}. Use /debug/env to inspect."
         ))
         return {
             "broker": "tradier",

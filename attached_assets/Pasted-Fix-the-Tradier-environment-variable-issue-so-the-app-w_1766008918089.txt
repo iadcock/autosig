@@ -1,0 +1,92 @@
+Fix the Tradier environment variable issue so the app works reliably
+in BOTH Replit Workspace Run and Replit Deployments, even when env
+settings are hard to find.
+
+PROBLEM:
+- The UI shows "Missing TRADIER_TOKEN"
+- User has added the secret and restarted
+- Replit deployment environment may not be inheriting workspace Secrets
+
+SOLUTION REQUIREMENTS:
+
+1) Create a centralized env loader utility:
+Create file: env_loader.py
+
+Implement a function:
+
+load_env(key: str) -> str | None
+
+This function should attempt, IN THIS ORDER:
+A) os.getenv(key)
+B) os.getenv(f"REPLIT_{key}")   # deployment-prefixed vars
+C) read from a local fallback config file (see step 2)
+
+Return the first non-empty value found.
+
+2) Add OPTIONAL fallback config (safe, gitignored):
+Create file: config_local.py (if it doesn’t exist)
+
+Example contents (do NOT hardcode in repo):
+TRADIER_TOKEN = None
+TRADIER_BASE_URL = None
+TRADIER_ACCOUNT_ID = None
+
+env_loader.py should attempt to import config_local
+inside a try/except and read attributes dynamically.
+
+This allows the user to temporarily unblock themselves
+without touching deployment env UI.
+
+3) Update Tradier smoke test to use env_loader:
+Replace all direct os.getenv("TRADIER_TOKEN") calls with:
+
+from env_loader import load_env
+
+token = load_env("TRADIER_TOKEN")
+base_url = load_env("TRADIER_BASE_URL") or "https://sandbox.tradier.com"
+account_id = load_env("TRADIER_ACCOUNT_ID")
+
+If token is missing:
+- Return a FAILED smoke test result with:
+  summary: "Missing TRADIER_TOKEN"
+  details: "Checked os.getenv, REPLIT_*, and config_local.py"
+
+4) Add a diagnostics endpoint:
+In app.py, add:
+
+GET /debug/env
+
+Return JSON like:
+{
+  "runtime": "deployment" or "workspace",
+  "TRADIER_TOKEN": true/false,
+  "TRADIER_BASE_URL": true/false,
+  "TRADIER_ACCOUNT_ID": true/false,
+  "checked_sources": ["os.getenv", "REPLIT_*", "config_local.py"]
+}
+
+Do NOT expose secret values.
+
+5) Update the UI error message:
+When Tradier test fails due to missing token, show:
+
+"TRADIER_TOKEN not found.
+Checked:
+- Workspace Secrets
+- Deployment env (REPLIT_*)
+- config_local.py fallback
+
+Use /debug/env to inspect environment visibility."
+
+6) Do NOT require the user to find Replit deployment env UI.
+The app must be debuggable entirely from:
+- Workspace Secrets
+- config_local.py (temporary)
+- /debug/env endpoint
+
+7) Safety:
+- Never print secret values
+- config_local.py should be optional and gitignored
+- This is a dev unblocker, not a production pattern
+
+IMPLEMENT cleanly and update imports accordingly.
