@@ -198,6 +198,10 @@ HTML_TEMPLATE = """
             color: #dc3545;
             font-weight: 600;
         }
+        .step-warn {
+            color: #ffc107;
+            font-weight: 600;
+        }
         .results-header {
             display: flex;
             justify-content: space-between;
@@ -330,8 +334,17 @@ HTML_TEMPLATE = """
             
             let tableRows = '';
             for (const step of data.steps) {
-                const okClass = step.ok ? 'step-ok' : 'step-fail';
-                const okText = step.ok ? '✓' : '✗';
+                let okClass, okText;
+                if (step.status === 'SKIPPED_SANDBOX') {
+                    okClass = 'step-warn';
+                    okText = '⚠️';
+                } else if (step.ok) {
+                    okClass = 'step-ok';
+                    okText = '✓';
+                } else {
+                    okClass = 'step-fail';
+                    okText = '✗';
+                }
                 tableRows += `
                     <tr>
                         <td>${step.name}</td>
@@ -344,12 +357,13 @@ HTML_TEMPLATE = """
             }
             
             const brokerName = broker.charAt(0).toUpperCase() + broker.slice(1);
+            const isSandbox = data.is_sandbox ? ' (Sandbox)' : '';
             const statusClass = data.success ? 'step-ok' : 'step-fail';
             const statusText = data.success ? 'PASSED' : 'FAILED';
             
             resultsDiv.innerHTML = `
                 <div class="results-header">
-                    <h4>${brokerName} Test Results: <span class="${statusClass}">${statusText}</span></h4>
+                    <h4>${brokerName}${isSandbox} Test Results: <span class="${statusClass}">${statusText}</span></h4>
                     <span class="results-timestamp">${data.timestamp}</span>
                 </div>
                 <table class="results-table">
