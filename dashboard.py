@@ -9,8 +9,8 @@ from flask import Flask, send_file, render_template_string, request, jsonify
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
 from env_loader import diagnose_env
-from signal_to_intent import build_trade_intent
-from execution_plan import build_execution_plan, log_execution_plan, get_latest_signal_entry
+from signal_to_intent import build_trade_intent, classify_signal_type, resolve_exit_to_trade_intent, has_complete_leg_details
+from execution_plan import build_execution_plan, log_execution_plan, get_latest_signal_entry, get_executable_signal
 from execution.router import execute_trade
 
 app = Flask(__name__)
@@ -262,7 +262,7 @@ HTML_TEMPLATE = """
         </p>
         
         <button id="btn-paper-execute" class="btn btn-test" onclick="executePaperSignal()">
-            Execute Last Parsed Signal (Paper)
+            Execute Last Executable Signal (Paper)
         </button>
         
         <div id="results-paper" class="results-container" style="display: none;"></div>
@@ -426,7 +426,7 @@ HTML_TEMPLATE = """
                 setTimeout(() => {
                     btn.disabled = false;
                     btn.className = 'btn btn-test';
-                    btn.innerHTML = 'Execute Last Parsed Signal (Paper)';
+                    btn.innerHTML = 'Execute Last Executable Signal (Paper)';
                 }, 3000);
             })
             .catch(error => {
@@ -444,7 +444,7 @@ HTML_TEMPLATE = """
                 setTimeout(() => {
                     btn.disabled = false;
                     btn.className = 'btn btn-test';
-                    btn.innerHTML = 'Execute Last Parsed Signal (Paper)';
+                    btn.innerHTML = 'Execute Last Executable Signal (Paper)';
                 }, 2000);
             });
         }
@@ -465,6 +465,17 @@ HTML_TEMPLATE = """
             
             const statusClass = data.execution_result?.status === 'SIMULATED' ? 'step-ok' : 'step-fail';
             const statusText = data.execution_result?.status || 'UNKNOWN';
+            const signalType = data.signal_type || 'UNKNOWN';
+            const signalTypeClass = signalType === 'ENTRY' ? 'step-ok' : (signalType === 'EXIT' ? 'step-warn' : '');
+            const matchedPositionId = data.matched_position_id || null;
+            
+            let positionInfo = '';
+            if (matchedPositionId) {
+                positionInfo = `<div class="info" style="margin-top: 10px; background: #fff3cd; border: 1px solid #ffc107;">
+                    <h3 style="color: #856404;">Matched Open Position</h3>
+                    <p style="font-family: monospace; font-size: 12px;">${matchedPositionId}</p>
+                </div>`;
+            }
             
             resultsDiv.innerHTML = `
                 <div class="results-header">
@@ -473,9 +484,15 @@ HTML_TEMPLATE = """
                 </div>
                 
                 <div class="info" style="margin-top: 10px;">
+                    <h3>Signal Type: <span class="${signalTypeClass}" style="font-weight: bold;">${signalType}</span></h3>
+                </div>
+                
+                <div class="info" style="margin-top: 10px;">
                     <h3>Signal Excerpt</h3>
                     <p style="font-family: monospace; white-space: pre-wrap; font-size: 12px; background: #f0f0f0; padding: 10px; border-radius: 4px; max-height: 100px; overflow-y: auto;">${escapeHtml(data.raw_excerpt || '')}</p>
                 </div>
+                
+                ${positionInfo}
                 
                 <div class="info" style="margin-top: 10px;">
                     <h3>Parsed Signal</h3>
@@ -572,23 +589,37 @@ def debug_env():
 @app.route("/execute/paper/last_signal", methods=["POST"])
 def execute_paper_last_signal():
     """
-    Execute the last parsed signal in paper (simulated) mode.
+    Execute the best executable signal in paper (simulated) mode.
     
-    1. Reads logs/alerts_parsed.jsonl from bottom up
-    2. Finds latest entry with classification == "SIGNAL"
-    3. Builds TradeIntent via build_trade_intent()
-    4. Executes via router.execute_trade()
-    5. Logs execution plan to logs/execution_plan.jsonl
-    6. Returns JSON with results
+    Smart signal selection:
+    1. Prefer ENTRY signals (most recent first)
+    2. Consider EXIT signals with complete leg details
+    3. Consider EXIT signals resolvable via open positions
+    4. Skip if no executable signal found
+    
+    Returns JSON with results including signal_type and matched_position_id.
     """
     from datetime import datetime
     
-    signal_entry = get_latest_signal_entry()
+    # Use smart signal selection
+    signal_entry, signal_type, skip_reason = get_executable_signal()
     
     if not signal_entry:
+        # Log the skip
+        execution_plan = build_execution_plan(
+            trade_intent=None,
+            execution_result=None,
+            source_post_id="none",
+            action="SKIP",
+            reason=skip_reason,
+            signal_type=signal_type
+        )
+        log_execution_plan(execution_plan)
+        
         return jsonify({
             "success": False,
-            "message": "No parsed signals found in logs/alerts_parsed.jsonl",
+            "message": skip_reason or "No executable signals found",
+            "signal_type": signal_type,
             "timestamp": datetime.utcnow().isoformat()
         })
     
@@ -597,7 +628,46 @@ def execute_paper_last_signal():
     raw_excerpt = signal_entry.get("raw_excerpt", "")
     
     try:
-        trade_intent = build_trade_intent(parsed_signal, execution_mode="PAPER")
+        trade_intent = None
+        matched_position_id = None
+        
+        if signal_type == "EXIT":
+            # Check if EXIT has complete leg details
+            if has_complete_leg_details(parsed_signal):
+                trade_intent = build_trade_intent(parsed_signal, execution_mode="PAPER")
+            else:
+                # Resolve via open positions
+                trade_intent, matched_position_id, error = resolve_exit_to_trade_intent(
+                    parsed_signal, execution_mode="PAPER"
+                )
+                if not trade_intent:
+                    # Log skip
+                    execution_plan = build_execution_plan(
+                        trade_intent=None,
+                        execution_result=None,
+                        source_post_id=post_id,
+                        action="SKIP",
+                        reason=error or "Could not resolve EXIT to open position",
+                        signal_type=signal_type
+                    )
+                    log_execution_plan(execution_plan)
+                    
+                    return jsonify({
+                        "success": False,
+                        "message": error or "Could not resolve EXIT signal",
+                        "signal_type": signal_type,
+                        "selected_post_id": post_id,
+                        "raw_excerpt": raw_excerpt[:200],
+                        "parsed_signal": parsed_signal,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+        else:
+            # ENTRY or other - build normally
+            trade_intent = build_trade_intent(parsed_signal, execution_mode="PAPER")
+        
+        # Add source_post_id to metadata for position tracking
+        if trade_intent.metadata:
+            trade_intent.metadata["source_post_id"] = post_id
         
         execution_result = execute_trade(trade_intent)
         
@@ -605,7 +675,9 @@ def execute_paper_last_signal():
             trade_intent=trade_intent,
             execution_result=execution_result,
             source_post_id=post_id,
-            action="PLACE_ORDER"
+            action="PLACE_ORDER",
+            signal_type=signal_type,
+            matched_position_id=matched_position_id
         )
         log_execution_plan(execution_plan)
         
@@ -641,6 +713,8 @@ def execute_paper_last_signal():
         
         return jsonify({
             "success": True,
+            "signal_type": signal_type,
+            "matched_position_id": matched_position_id,
             "selected_post_id": post_id,
             "raw_excerpt": raw_excerpt[:500],
             "parsed_signal": parsed_signal,
@@ -653,6 +727,7 @@ def execute_paper_last_signal():
         return jsonify({
             "success": False,
             "message": f"Execution error: {str(e)}",
+            "signal_type": signal_type,
             "selected_post_id": post_id,
             "raw_excerpt": raw_excerpt[:200],
             "parsed_signal": parsed_signal,

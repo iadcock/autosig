@@ -1,0 +1,176 @@
+Implement clean EXIT handling + paper-only open position tracking + smarter signal selection for the “Execute” button.
+
+CURRENT PROBLEM:
+- The “Execute Last Parsed Signal (Paper)” button can select an EXIT alert that lacks legs/expiration.
+- The system incorrectly creates a standalone SELL_TO_CLOSE TradeIntent with empty legs.
+- EXIT signals must be position-aware (close something that was previously opened).
+
+GOALS:
+1) Track open positions internally for PAPER mode only.
+2) Make EXIT signals close an existing open position (matching ticker/legs), otherwise SKIP with a clear reason.
+3) Refine signal selection so the button always chooses an executable signal (ENTRY first; EXIT only if it can be matched).
+
+SCOPE:
+- PAPER mode only for position tracking (no broker positions)
+- Do NOT change Whop fetching
+- Do NOT change broker smoke tests
+- Keep Tradier integration untouched
+- Keep existing logging/reporting intact, but add any new log needed for paper positions.
+
+────────────────────────────────────────
+A) Define “Signal Types” and enforce rules
+────────────────────────────────────────
+Update parsing output (or downstream interpretation) to label each parsed signal as one of:
+- signal_type: "ENTRY" | "EXIT" | "UNKNOWN"
+
+Rules:
+- If strategy indicates open (debit spread, credit spread, long, buy to open, sell to open, etc.) => ENTRY
+- If strategy indicates close/exit (exit, take profits, close, trim, cut, stop hit, sell to close, buy to close) => EXIT
+- Otherwise UNKNOWN
+
+IMPORTANT:
+- ENTRY signals must produce a complete TradeIntent (ticker + legs or stock qty).
+- EXIT signals MUST NOT create a TradeIntent directly unless they include full contract details.
+- Default behavior for EXIT: resolve against open positions store.
+
+────────────────────────────────────────
+B) Implement PAPER Open Position Store
+────────────────────────────────────────
+Create file: paper_positions.py
+
+Use a lightweight JSONL store at:
+- data/paper_open_positions.jsonl
+and an in-memory index loaded at startup.
+
+Define a model (dataclass or pydantic):
+PaperPosition:
+- position_id (uuid)
+- status: "OPEN" | "CLOSED"
+- opened_at (iso)
+- closed_at (iso|None)
+- source_post_id (str)
+- underlying (str)
+- instrument_type: "stock" | "option" | "index_option"
+- legs (list)  # for options/spreads
+- quantity (int)
+- open_intent (TradeIntent dict)
+- close_intent (TradeIntent dict|None)
+
+Implement functions:
+- load_positions() -> list[PaperPosition]
+- append_open_position(position: PaperPosition) -> None
+- mark_position_closed(position_id, close_intent: dict) -> None
+- find_open_position_for_exit(parsed_signal: dict) -> PaperPosition|None
+
+Matching logic for EXIT:
+Try in order:
+1) exact match: ticker/underlying + exact legs signature (if parsed_signal has legs)
+2) fallback match: ticker/underlying + most recent OPEN position
+3) if still none: return None
+
+Leg signature normalization:
+- sort legs by (expiration, strike, option_type, side)
+- compare normalized tuples
+
+────────────────────────────────────────
+C) Update PaperExecutor to create/close positions
+────────────────────────────────────────
+In executors/paper_executor.py:
+
+When executing an ENTRY TradeIntent:
+- Simulate fill (current behavior)
+- Create a PaperPosition OPEN record and persist it via paper_positions.append_open_position(...)
+- Include position_id in ExecutionResult.message/details if possible
+
+When executing an EXIT TradeIntent:
+- This should normally be generated from an existing open position (see section D)
+- After simulated close, mark the matched PaperPosition as CLOSED via paper_positions.mark_position_closed(...)
+
+Do not require market data. Keep deterministic fills.
+
+────────────────────────────────────────
+D) Fix EXIT handling in signal_to_intent.py
+────────────────────────────────────────
+Update build_trade_intent(parsed_signal, execution_mode="paper"):
+
+ENTRY behavior:
+- same as now
+
+EXIT behavior:
+- If parsed_signal includes FULL contract details (legs with expiration/strike/type):
+  - build a closing TradeIntent directly (reverse sides; action close; qty inferred)
+- ELSE:
+  - do NOT build a TradeIntent directly
+  - instead return a sentinel object like:
+    { "needs_position_resolution": true, "reason": "EXIT has no legs; resolve via open positions" }
+
+Create a helper:
+resolve_exit_to_trade_intent(parsed_signal) -> TradeIntent|None
+- calls paper_positions.find_open_position_for_exit(parsed_signal)
+- if found:
+   - build close TradeIntent based on the OPEN position’s open_intent:
+     - same instrument_type, underlying, legs, quantity
+     - action = close
+     - reverse sides for each leg (BUY<->SELL)
+     - order_type = market (or limit if EXIT alert provides limit)
+- if not found: return None
+
+If no open position found:
+- return SKIP at execution layer with reason "No open PAPER position to close for ticker X"
+
+────────────────────────────────────────
+E) Refine “Execute” button logic so it does the right thing
+────────────────────────────────────────
+Replace “Execute Last Parsed Signal (Paper)” selection logic with this:
+
+1) Scan alerts_parsed.jsonl from newest to oldest
+2) Prefer ENTRY signals that are executable:
+   - classification == "SIGNAL"
+   - signal_type == "ENTRY"
+   - parsed_signal has enough fields to build a TradeIntent
+3) If no ENTRY found, consider EXIT signals:
+   - classification == "SIGNAL"
+   - signal_type == "EXIT"
+   - if EXIT has legs => executable
+   - else only executable IF find_open_position_for_exit(parsed_signal) returns a match
+4) If none are executable:
+   - return success=false with message "No executable signals found (need a complete ENTRY or a matching OPEN position for EXIT)."
+
+UI:
+- Keep the single button, but make it “Execute Last Executable Signal (Paper)”
+- Show whether it chose ENTRY or EXIT
+- If it skipped an EXIT due to no open position, show that clearly
+
+────────────────────────────────────────
+F) Logging
+────────────────────────────────────────
+When executing via /execute/paper/last_signal:
+- Always append to logs/execution_plan.jsonl with:
+  - selected_post_id
+  - signal_type
+  - action: "PLACE_ORDER" or "SKIP"
+  - reason (if skip)
+  - trade_intent (if placed)
+  - execution_result (if placed)
+  - matched_position_id (if EXIT resolved)
+
+Also store paper positions to data/paper_open_positions.jsonl.
+
+────────────────────────────────────────
+G) Acceptance Criteria
+────────────────────────────────────────
+1) ENTRY signal executes in PAPER mode AND creates an OPEN position record.
+2) EXIT signal without legs:
+   - resolves to the most recent OPEN position for that ticker
+   - generates a proper close TradeIntent with inherited legs
+   - executes in PAPER mode
+   - marks position CLOSED
+3) EXIT with no matching open position:
+   - does NOT fabricate an option close
+   - returns SKIP with a clear reason
+4) The button always picks an executable signal:
+   - ENTRY first
+   - EXIT only if executable or resolvable
+5) UI shows selected signal excerpt, parsed signal, trade intent, execution result, and (if EXIT) matched position_id.
+
+Implement cleanly. Keep existing functionality intact.

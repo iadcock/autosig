@@ -7,7 +7,7 @@ Logs execution plans to logs/execution_plan.jsonl for audit and analysis.
 import json
 import os
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, Any, List, Tuple
 
 from trade_intent import TradeIntent, ExecutionResult
 
@@ -16,70 +16,83 @@ EXECUTION_PLAN_LOG = "logs/execution_plan.jsonl"
 
 
 def build_execution_plan(
-    trade_intent: TradeIntent,
-    execution_result: ExecutionResult,
+    trade_intent: Optional[TradeIntent],
+    execution_result: Optional[ExecutionResult],
     source_post_id: str,
     action: Literal["PLACE_ORDER", "SKIP"] = "PLACE_ORDER",
-    reason: Optional[str] = None
+    reason: Optional[str] = None,
+    signal_type: Optional[str] = None,
+    matched_position_id: Optional[str] = None
 ) -> dict:
     """
     Build a loggable execution plan dictionary.
     
     Args:
-        trade_intent: The TradeIntent that was executed
-        execution_result: The ExecutionResult from execution
+        trade_intent: The TradeIntent that was executed (or None if skipped)
+        execution_result: The ExecutionResult from execution (or None if skipped)
         source_post_id: The post ID from the parsed signal
         action: "PLACE_ORDER" or "SKIP"
         reason: Reason for skipping (if action is SKIP)
+        signal_type: ENTRY, EXIT, or UNKNOWN
+        matched_position_id: Position ID if EXIT resolved from open position
         
     Returns:
         Dictionary ready for JSONL logging
     """
-    intent_dict = {
-        "id": trade_intent.id,
-        "created_at": trade_intent.created_at.isoformat(),
-        "execution_mode": trade_intent.execution_mode,
-        "instrument_type": trade_intent.instrument_type,
-        "underlying": trade_intent.underlying,
-        "action": trade_intent.action,
-        "order_type": trade_intent.order_type,
-        "limit_price": trade_intent.limit_price,
-        "limit_min": trade_intent.limit_min,
-        "limit_max": trade_intent.limit_max,
-        "quantity": trade_intent.quantity,
-        "legs": [
-            {
-                "side": leg.side,
-                "quantity": leg.quantity,
-                "strike": leg.strike,
-                "option_type": leg.option_type,
-                "expiration": leg.expiration
-            }
-            for leg in trade_intent.legs
-        ],
-        "raw_signal": trade_intent.raw_signal,
-        "metadata": trade_intent.metadata
-    }
+    intent_dict = None
+    result_dict = None
+    execution_mode = None
     
-    result_dict = {
-        "intent_id": execution_result.intent_id,
-        "status": execution_result.status,
-        "broker": execution_result.broker,
-        "order_id": execution_result.order_id,
-        "message": execution_result.message,
-        "fill_price": execution_result.fill_price,
-        "filled_quantity": execution_result.filled_quantity,
-        "submitted_at": execution_result.submitted_at.isoformat(),
-        "filled_at": execution_result.filled_at.isoformat() if execution_result.filled_at else None,
-        "submitted_payload": execution_result.submitted_payload
-    }
+    if trade_intent:
+        execution_mode = trade_intent.execution_mode
+        intent_dict = {
+            "id": trade_intent.id,
+            "created_at": trade_intent.created_at.isoformat(),
+            "execution_mode": trade_intent.execution_mode,
+            "instrument_type": trade_intent.instrument_type,
+            "underlying": trade_intent.underlying,
+            "action": trade_intent.action,
+            "order_type": trade_intent.order_type,
+            "limit_price": trade_intent.limit_price,
+            "limit_min": trade_intent.limit_min,
+            "limit_max": trade_intent.limit_max,
+            "quantity": trade_intent.quantity,
+            "legs": [
+                {
+                    "side": leg.side,
+                    "quantity": leg.quantity,
+                    "strike": leg.strike,
+                    "option_type": leg.option_type,
+                    "expiration": leg.expiration
+                }
+                for leg in trade_intent.legs
+            ],
+            "raw_signal": trade_intent.raw_signal,
+            "metadata": trade_intent.metadata
+        }
+    
+    if execution_result:
+        result_dict = {
+            "intent_id": execution_result.intent_id,
+            "status": execution_result.status,
+            "broker": execution_result.broker,
+            "order_id": execution_result.order_id,
+            "message": execution_result.message,
+            "fill_price": execution_result.fill_price,
+            "filled_quantity": execution_result.filled_quantity,
+            "submitted_at": execution_result.submitted_at.isoformat(),
+            "filled_at": execution_result.filled_at.isoformat() if execution_result.filled_at else None,
+            "submitted_payload": execution_result.submitted_payload
+        }
     
     return {
         "ts_iso": datetime.utcnow().isoformat() + "Z",
         "post_id": source_post_id,
+        "signal_type": signal_type,
         "action": action,
         "reason": reason,
-        "execution_mode": trade_intent.execution_mode,
+        "matched_position_id": matched_position_id,
+        "execution_mode": execution_mode,
         "order_preview": intent_dict,
         "result": result_dict
     }
@@ -126,3 +139,82 @@ def get_latest_signal_entry() -> Optional[dict]:
         return entries[-1]
     
     return None
+
+
+def get_executable_signal() -> Tuple[Optional[dict], str, Optional[str]]:
+    """
+    Find the best executable signal from alerts_parsed.jsonl.
+    
+    Priority:
+    1. ENTRY signals (most recent first)
+    2. EXIT signals with complete leg details
+    3. EXIT signals that can be resolved via open positions
+    
+    Returns:
+        Tuple of (signal_entry or None, signal_type, skip_reason or None)
+    """
+    from signal_to_intent import classify_signal_type, has_complete_leg_details
+    from paper_positions import find_open_position_for_exit
+    
+    alerts_file = "logs/alerts_parsed.jsonl"
+    
+    if not os.path.exists(alerts_file):
+        return None, "UNKNOWN", "No alerts_parsed.jsonl file found"
+    
+    entries = []
+    with open(alerts_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    entry = json.loads(line)
+                    if entry.get("classification") == "SIGNAL" and entry.get("parsed_signal"):
+                        entries.append(entry)
+                except json.JSONDecodeError:
+                    continue
+    
+    if not entries:
+        return None, "UNKNOWN", "No parsed signals found in logs/alerts_parsed.jsonl"
+    
+    # Process from newest to oldest
+    entries.reverse()
+    
+    # First pass: look for ENTRY signals
+    for entry in entries:
+        parsed_signal = entry.get("parsed_signal", {})
+        signal_type = classify_signal_type(parsed_signal)
+        
+        if signal_type == "ENTRY":
+            # Check if it has enough data to execute
+            ticker = parsed_signal.get("ticker", "")
+            if ticker:
+                return entry, "ENTRY", None
+    
+    # Second pass: look for executable EXIT signals
+    for entry in entries:
+        parsed_signal = entry.get("parsed_signal", {})
+        signal_type = classify_signal_type(parsed_signal)
+        
+        if signal_type == "EXIT":
+            # Check if EXIT has complete leg details
+            if has_complete_leg_details(parsed_signal):
+                return entry, "EXIT", None
+            
+            # Check if EXIT can be resolved via open position
+            position = find_open_position_for_exit(parsed_signal)
+            if position is not None:
+                return entry, "EXIT", None
+    
+    # No executable signal found - return the most recent with reason
+    if entries:
+        latest = entries[0]
+        parsed_signal = latest.get("parsed_signal", {})
+        signal_type = classify_signal_type(parsed_signal)
+        
+        if signal_type == "EXIT":
+            ticker = parsed_signal.get("ticker", "UNKNOWN")
+            return None, "EXIT", f"EXIT signal for {ticker} has no matching open PAPER position"
+        else:
+            return None, signal_type, f"Signal type {signal_type} is not executable"
+    
+    return None, "UNKNOWN", "No executable signals found"

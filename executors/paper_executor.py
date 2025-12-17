@@ -19,6 +19,7 @@ class PaperExecutor(BaseExecutor):
     
     Useful for testing and development without risking real money.
     Simulates immediate fills at the limit price (or a random price for market orders).
+    Maintains paper positions for open/close tracking.
     """
     
     def __init__(self):
@@ -58,6 +59,20 @@ class PaperExecutor(BaseExecutor):
         
         payload = self._build_submitted_payload(intent)
         
+        # Handle position tracking
+        position_id = None
+        signal_type = intent.metadata.get("signal_type", "ENTRY") if intent.metadata else "ENTRY"
+        
+        if signal_type == "ENTRY" or intent.action in ["BUY_TO_OPEN", "SELL_TO_OPEN"]:
+            position_id = self._create_open_position(intent, fill_price, payload)
+            if position_id:
+                fill_summary += f" [Position: {position_id[:8]}...]"
+        elif signal_type == "EXIT" or intent.action in ["BUY_TO_CLOSE", "SELL_TO_CLOSE"]:
+            matched_id = intent.metadata.get("matched_position_id") if intent.metadata else None
+            if matched_id:
+                self._close_position(matched_id, intent)
+                fill_summary += f" [Closed: {matched_id[:8]}...]"
+        
         return ExecutionResult(
             intent_id=intent.id,
             status="SIMULATED",
@@ -69,6 +84,89 @@ class PaperExecutor(BaseExecutor):
             filled_at=datetime.utcnow(),
             submitted_payload=payload
         )
+    
+    def _create_open_position(self, intent: TradeIntent, fill_price: float, payload: dict) -> Optional[str]:
+        """Create an open position record for ENTRY trades."""
+        try:
+            from paper_positions import PaperPosition, PositionLeg, append_open_position
+            
+            position_legs = []
+            for leg in intent.legs:
+                position_legs.append(PositionLeg(
+                    side=leg.side,
+                    quantity=leg.quantity,
+                    strike=leg.strike,
+                    option_type=leg.option_type,
+                    expiration=leg.expiration
+                ))
+            
+            position = PaperPosition(
+                status="OPEN",
+                source_post_id=payload.get("metadata", {}).get("source_post_id", ""),
+                underlying=intent.underlying,
+                instrument_type=intent.instrument_type,
+                legs=position_legs,
+                quantity=intent.quantity,
+                open_intent={
+                    "id": intent.id,
+                    "action": intent.action,
+                    "order_type": intent.order_type,
+                    "limit_price": intent.limit_price,
+                    "fill_price": fill_price,
+                    "legs": [
+                        {
+                            "side": leg.side,
+                            "quantity": leg.quantity,
+                            "strike": leg.strike,
+                            "option_type": leg.option_type,
+                            "expiration": leg.expiration
+                        }
+                        for leg in intent.legs
+                    ],
+                    "metadata": intent.metadata
+                }
+            )
+            
+            append_open_position(position)
+            logger.info(f"[PAPER] Created open position: {position.position_id[:8]}... for {intent.underlying}")
+            return position.position_id
+            
+        except Exception as e:
+            logger.warning(f"[PAPER] Could not create position record: {e}")
+            return None
+    
+    def _close_position(self, position_id: str, intent: TradeIntent) -> bool:
+        """Close an existing position."""
+        try:
+            from paper_positions import mark_position_closed
+            
+            close_intent = {
+                "id": intent.id,
+                "action": intent.action,
+                "order_type": intent.order_type,
+                "limit_price": intent.limit_price,
+                "legs": [
+                    {
+                        "side": leg.side,
+                        "quantity": leg.quantity,
+                        "strike": leg.strike,
+                        "option_type": leg.option_type,
+                        "expiration": leg.expiration
+                    }
+                    for leg in intent.legs
+                ]
+            }
+            
+            success = mark_position_closed(position_id, close_intent)
+            if success:
+                logger.info(f"[PAPER] Closed position: {position_id[:8]}...")
+            else:
+                logger.warning(f"[PAPER] Position {position_id[:8]}... not found or already closed")
+            return success
+            
+        except Exception as e:
+            logger.warning(f"[PAPER] Could not close position: {e}")
+            return False
     
     def _calculate_fill_price(self, intent: TradeIntent) -> float:
         """

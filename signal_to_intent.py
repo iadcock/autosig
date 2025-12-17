@@ -6,10 +6,85 @@ and the execution layer (TradeIntent).
 """
 
 from datetime import date
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, Any, Tuple
 
 from trade_intent import TradeIntent, OptionLeg as IntentOptionLeg
 from models import ParsedSignal
+
+
+def classify_signal_type(parsed_signal: dict) -> Literal["ENTRY", "EXIT", "UNKNOWN"]:
+    """
+    Classify a signal as ENTRY, EXIT, or UNKNOWN.
+    
+    ENTRY: Opens a new position (buy to open, sell to open, spreads, longs)
+    EXIT: Closes an existing position (exit, take profit, close, sell to close)
+    UNKNOWN: Cannot determine
+    """
+    strategy = parsed_signal.get("strategy", "").upper()
+    raw_text = parsed_signal.get("raw_text", "").lower()
+    
+    # Check for EXIT patterns first
+    exit_strategies = ["EXIT"]
+    exit_keywords = [
+        "exit", "close", "take profit", "take profits", "cut position", 
+        "stop hit", "stopped out", "sell to close", "selling to close",
+        "buy to close", "buying to close", "trim", "cut", "out of"
+    ]
+    
+    if strategy in exit_strategies:
+        return "EXIT"
+    
+    if any(kw in raw_text for kw in exit_keywords):
+        return "EXIT"
+    
+    # Check for ENTRY patterns
+    entry_strategies = [
+        "CALL_DEBIT_SPREAD", "PUT_DEBIT_SPREAD", 
+        "CALL_CREDIT_SPREAD", "PUT_CREDIT_SPREAD",
+        "IRON_CONDOR", "LONG_STOCK", "LONG_OPTION",
+        "CALL", "PUT"
+    ]
+    entry_keywords = [
+        "buy to open", "sell to open", "opening", "new position",
+        "entering", "going long", "going short", "debit spread", 
+        "credit spread", "iron condor"
+    ]
+    
+    if strategy in entry_strategies:
+        return "ENTRY"
+    
+    if any(kw in raw_text for kw in entry_keywords):
+        return "ENTRY"
+    
+    # If has valid legs and strategy contains spread/option indicators, it's likely ENTRY
+    legs = parsed_signal.get("legs", [])
+    if legs and any(kw in strategy for kw in ["SPREAD", "CALL", "PUT", "OPTION"]):
+        return "ENTRY"
+    
+    return "UNKNOWN"
+
+
+def has_complete_leg_details(parsed_signal: dict) -> bool:
+    """Check if signal has complete leg details for direct execution."""
+    legs = parsed_signal.get("legs", [])
+    if not legs:
+        return False
+    
+    for leg in legs:
+        if not isinstance(leg, dict):
+            return False
+        # Must have strike and option_type at minimum
+        if not leg.get("strike") or not leg.get("option_type"):
+            return False
+    
+    # Must have expiration either at signal level or in each leg
+    expiration = parsed_signal.get("expiration")
+    if not expiration:
+        for leg in legs:
+            if not leg.get("expiration"):
+                return False
+    
+    return True
 
 
 def build_trade_intent(
@@ -55,6 +130,8 @@ def build_trade_intent(
     
     intent_legs = _build_intent_legs(legs_data, exp_str)
     
+    signal_type = classify_signal_type(parsed_signal)
+    
     return TradeIntent(
         execution_mode=execution_mode,
         instrument_type=instrument_type,
@@ -71,9 +148,103 @@ def build_trade_intent(
             "strategy": strategy,
             "limit_kind": limit_kind,
             "expiration": exp_str,
-            "source": "whop_parsed_signal"
+            "source": "whop_parsed_signal",
+            "signal_type": signal_type
         }
     )
+
+
+def build_close_intent_from_position(
+    position: Any,
+    parsed_signal: dict,
+    execution_mode: Literal["PAPER", "LIVE", "HISTORICAL"] = "PAPER"
+) -> TradeIntent:
+    """
+    Build a closing TradeIntent from an open position.
+    
+    Args:
+        position: PaperPosition object with open position details
+        parsed_signal: The EXIT signal that triggered the close
+        execution_mode: Execution mode
+        
+    Returns:
+        TradeIntent with reversed legs for closing
+    """
+    open_intent = position.open_intent
+    
+    # Determine close action based on original open action
+    original_action = open_intent.get("action", "BUY_TO_OPEN")
+    if "SELL" in original_action:
+        close_action = "BUY_TO_CLOSE"
+    else:
+        close_action = "SELL_TO_CLOSE"
+    
+    # Build closing legs with reversed sides
+    close_legs = []
+    for leg in position.legs:
+        reversed_side = "SELL" if leg.side == "BUY" else "BUY"
+        close_legs.append(IntentOptionLeg(
+            side=reversed_side,
+            quantity=leg.quantity,
+            strike=leg.strike,
+            option_type=leg.option_type,
+            expiration=leg.expiration
+        ))
+    
+    # Get limit price from exit signal if available
+    limit_min = parsed_signal.get("limit_min", 0.0)
+    limit_max = parsed_signal.get("limit_max", 0.0)
+    limit_price = None
+    if limit_min > 0:
+        limit_price = limit_min
+    elif limit_max > 0:
+        limit_price = limit_max
+    
+    order_type = "LIMIT" if limit_price else "MARKET"
+    
+    return TradeIntent(
+        execution_mode=execution_mode,
+        instrument_type=position.instrument_type,
+        underlying=position.underlying.upper(),
+        action=close_action,
+        order_type=order_type,
+        limit_price=limit_price,
+        quantity=position.quantity,
+        legs=close_legs,
+        raw_signal=parsed_signal.get("raw_text", ""),
+        metadata={
+            "strategy": "EXIT",
+            "source": "position_close",
+            "signal_type": "EXIT",
+            "matched_position_id": position.position_id
+        }
+    )
+
+
+def resolve_exit_to_trade_intent(
+    parsed_signal: dict,
+    execution_mode: Literal["PAPER", "LIVE", "HISTORICAL"] = "PAPER"
+) -> Tuple[Optional[TradeIntent], Optional[str], Optional[str]]:
+    """
+    Resolve an EXIT signal to a TradeIntent by finding matching open position.
+    
+    Args:
+        parsed_signal: The EXIT signal to resolve
+        execution_mode: Execution mode
+        
+    Returns:
+        Tuple of (TradeIntent or None, position_id or None, error_reason or None)
+    """
+    from paper_positions import find_open_position_for_exit
+    
+    position = find_open_position_for_exit(parsed_signal)
+    
+    if position is None:
+        ticker = parsed_signal.get("ticker", "UNKNOWN")
+        return None, None, f"No open PAPER position to close for ticker {ticker}"
+    
+    intent = build_close_intent_from_position(position, parsed_signal, execution_mode)
+    return intent, position.position_id, None
 
 
 def _determine_action(strategy: str, raw_text: str) -> Literal["BUY", "SELL", "BUY_TO_OPEN", "BUY_TO_CLOSE", "SELL_TO_OPEN", "SELL_TO_CLOSE"]:
@@ -81,8 +252,8 @@ def _determine_action(strategy: str, raw_text: str) -> Literal["BUY", "SELL", "B
     Determine the trade action based on strategy and keywords.
     
     For EXIT signals:
-    - Credit spreads (sold to open) must be BOUGHT to close → BUY_TO_CLOSE
-    - Debit spreads (bought to open) must be SOLD to close → SELL_TO_CLOSE
+    - Credit spreads (sold to open) must be BOUGHT to close -> BUY_TO_CLOSE
+    - Debit spreads (bought to open) must be SOLD to close -> SELL_TO_CLOSE
     - Default to SELL_TO_CLOSE for long positions
     
     We infer the original position type from keywords in the raw text.

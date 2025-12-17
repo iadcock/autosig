@@ -6,11 +6,19 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-17: Implemented paper position tracking and smart EXIT handling
+  - New module: paper_positions.py - JSONL-backed position store with open/close tracking
+  - Signal type classification: ENTRY, EXIT, UNKNOWN
+  - EXIT resolution: Matches EXIT alerts to open positions by ticker/legs
+  - PaperExecutor creates OPEN positions on ENTRY, closes them on EXIT
+  - Smart signal selection: Prefers ENTRY signals, only allows resolvable EXIT
+  - Dashboard shows signal_type and matched_position_id in UI
+  - Positions stored in data/paper_open_positions.jsonl
 - 2024-12-17: Wired parsed Whop signals to TradeIntent with paper execution
   - New module: signal_to_intent.py converts ParsedSignal → TradeIntent
   - New module: execution_plan.py for logging execution plans to JSONL
   - Enhanced PaperExecutor with detailed fill summaries for stocks, options, and spreads
-  - Dashboard button: "Execute Last Parsed Signal (Paper)"
+  - Dashboard button: "Execute Last Executable Signal (Paper)"
   - Endpoint: POST /execute/paper/last_signal
   - Logs execution plans to logs/execution_plan.jsonl
   - EXIT signals correctly map to BUY_TO_CLOSE for credit spreads
@@ -72,6 +80,7 @@ An automated trading bot that processes options trade alerts from Whop and execu
 | `signal_to_intent.py` | Converts ParsedSignal to TradeIntent |
 | `execution_plan.py` | Builds and logs execution plans |
 | `env_loader.py` | Centralized environment variable loader |
+| `paper_positions.py` | Paper position tracking (JSONL store) |
 
 ### Data Flow
 
