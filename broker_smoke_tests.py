@@ -52,6 +52,8 @@ def _get_tradier_position_qty(base_url: str, headers: dict, account_id: str, sym
         if resp.status_code == 200:
             data = resp.json()
             positions = data.get("positions", {})
+            if not positions or positions == "null" or not isinstance(positions, dict):
+                return 0
             position_list = positions.get("position", [])
             if isinstance(position_list, dict):
                 position_list = [position_list]
@@ -512,9 +514,12 @@ def tradier_smoke_test() -> dict:
             if resp.status_code == 200:
                 data = resp.json()
                 positions = data.get("positions", {})
-                position_list = positions.get("position", [])
-                if isinstance(position_list, dict):
-                    position_list = [position_list]
+                if not positions or positions == "null" or not isinstance(positions, dict):
+                    position_list = []
+                else:
+                    position_list = positions.get("position", [])
+                    if isinstance(position_list, dict):
+                        position_list = [position_list]
                 
                 found_position = None
                 for pos in position_list if position_list else []:
@@ -593,9 +598,12 @@ def tradier_smoke_test() -> dict:
             if resp.status_code == 200:
                 data = resp.json()
                 positions = data.get("positions", {})
-                position_list = positions.get("position", [])
-                if isinstance(position_list, dict):
-                    position_list = [position_list]
+                if not positions or positions == "null" or not isinstance(positions, dict):
+                    position_list = []
+                else:
+                    position_list = positions.get("position", [])
+                    if isinstance(position_list, dict):
+                        position_list = [position_list]
                 
                 found_position = None
                 for pos in position_list if position_list else []:
