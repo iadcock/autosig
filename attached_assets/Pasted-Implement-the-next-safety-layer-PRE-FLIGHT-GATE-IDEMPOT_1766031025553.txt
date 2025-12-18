@@ -1,0 +1,204 @@
+Implement the next safety layer: PRE-FLIGHT GATE + IDEMPOTENCY/DEDUPE + REVIEW QUEUE with approve buttons.
+
+Context:
+- We already have Whop ingestion + parsing logs (alerts_raw.jsonl, alerts_parsed.jsonl)
+- We already can execute the last executable signal in PAPER mode and log execution_plan.jsonl
+- We already have TradeIntent models + execution router + PaperExecutor
+- Tradier live trading exists behind an executor, but we must not enable it by accident
+- Supported assets v1: US stocks/ETFs + SPX options
+- This prompt adds safety + a review workflow. No parser changes required.
+
+GOALS:
+1) Add a Preflight Gate that runs before ANY execution (paper or live).
+2) Add idempotency/dedupe so the same signal cannot be executed twice accidentally.
+3) Add a Review Queue UI:
+   - list recent parsed signals
+   - show whether each is executable
+   - allow Approve (paper), Approve (live), Reject
+   - live approve requires explicit LIVE_TRADING=true
+4) Log everything: approvals, rejects, and execution attempts.
+
+────────────────────────────────────────
+A) Preflight Gate (must-have)
+────────────────────────────────────────
+Create file: preflight.py
+
+Implement:
+preflight_check(parsed_signal: dict, trade_intent: dict, execution_mode: str) -> dict
+
+Return:
+{
+  "ok": bool,
+  "checks": [ { "name": str, "ok": bool, "summary": str } ],
+  "blocked_reason": str | None,
+  "warnings": [str]
+}
+
+Preflight Rules:
+1) Completeness:
+- For stock/ETF: ticker present, quantity >= 1
+- For options: underlying present, legs non-empty, each leg has expiration+strike+type+side
+- If EXIT: must have resolved position_id or full contract details (otherwise block)
+
+2) Supported assets (v1):
+- allow instrument_type in {"stock","option","index_option"}
+- if index_option: underlying must be "SPX"
+- reject crypto/futures/unknowns
+
+3) Risk controls (use env defaults if not set):
+Add env vars with safe defaults:
+- MAX_RISK_PCT_PER_TRADE = 0.02
+- MAX_DAILY_RISK_PCT = 0.05
+- MAX_OPEN_POSITIONS = 10
+- ALLOW_0DTE_SPX = false  (default false)
+- ALLOW_NEXT_DAY_SPX = true (optional)
+Interpret parsed_signal.size_pct if available.
+If missing size_pct: warn and clamp to MAX_RISK_PCT_PER_TRADE.
+
+4) Time/DTE guard (SPX only):
+- If underlying == "SPX" and expiration is today, block unless ALLOW_0DTE_SPX=true.
+(Use local date; do not use market data APIs.)
+
+5) Mode guard (LIVE safety):
+- If execution_mode == "live": require env LIVE_TRADING == "true"
+- Otherwise block with reason "LIVE_TRADING disabled"
+
+6) Dedupe guard:
+- If signal has post_id/hash that is already executed (see section B), block.
+
+Preflight must be called before router.execute_trade().
+
+────────────────────────────────────────
+B) Idempotency / Dedupe
+────────────────────────────────────────
+Create file: dedupe_store.py
+
+Store executed signals in:
+data/executed_signals.jsonl
+
+Define:
+- is_executed(post_id: str) -> bool
+- mark_executed(post_id: str, execution_mode: str, trade_intent_id: str, result_status: str) -> None
+
+Key:
+- use selected_post_id if available, else stable hash (e.g. sha256 of raw alert text)
+
+Behavior:
+- Any approve/execute must check is_executed() first.
+- If already executed, block and show message in UI.
+- Add optional override flag (admin-only) later; do NOT implement override now.
+
+────────────────────────────────────────
+C) Review Queue
+────────────────────────────────────────
+Add a review queue system that surfaces recent parsed signals and allows approval.
+
+Create file: review_queue.py
+
+Implement:
+- list_recent_signals(limit=25) -> list[dict]
+  Reads logs/alerts_parsed.jsonl newest->oldest and returns entries with:
+  post_id, ts_iso, raw_excerpt, parsed_signal, classification, signal_type if present.
+
+- build_intent_and_preflight(entry, execution_mode) -> {trade_intent, preflight_result}
+  Uses existing signal_to_intent + exit resolution
+  Produces either:
+   - trade_intent dict (if buildable)
+   - or None with reason
+  Runs preflight_check()
+
+- record_review_action(post_id, action, mode, notes, trade_intent_id=None, preflight=None, result=None)
+  Append to:
+  data/review_actions.jsonl
+  with timestamp.
+
+Actions:
+- APPROVE_PAPER
+- APPROVE_LIVE
+- REJECT
+
+Reject must require a short note string (e.g. "Not a real signal", "Ambiguous", "Duplicate", etc.).
+
+────────────────────────────────────────
+D) UI Changes (Dashboard)
+────────────────────────────────────────
+Update the dashboard (/) to include a new section: "Review Queue"
+
+Display a table of the most recent 20–25 parsed signals with columns:
+- Time
+- Ticker
+- Type (ENTRY/EXIT/UNKNOWN)
+- Executable? (Yes/No)
+- Dedupe? (Already executed)
+- Preflight (PASS/BLOCK + short reason)
+- Actions
+
+Each row has buttons:
+- "Approve (Paper)"
+- "Approve (Live)"
+- "Reject"
+
+When clicking Approve:
+1) Build TradeIntent (paper/live)
+2) Run preflight_check()
+3) If blocked, show the checks list and do NOT execute
+4) If ok:
+   - call router.execute_trade(trade_intent)
+   - mark_executed(post_id,...)
+   - log to execution_plan.jsonl
+   - record_review_action()
+
+When clicking Reject:
+- record_review_action(post_id, action="REJECT", notes=<user input>)
+
+UI details:
+- Approve buttons should show running spinner and success/fail colors like your broker test buttons.
+- Render a detail panel below showing:
+  raw excerpt
+  parsed signal JSON
+  trade intent JSON (if buildable)
+  preflight check results table (each check with pass/fail)
+  execution result JSON (if executed)
+  dedupe status
+
+Live Approve behavior:
+- If LIVE_TRADING != true, the preflight must block with a clear reason.
+- The UI should display "Live trading disabled" not just a generic failure.
+
+────────────────────────────────────────
+E) Endpoints
+────────────────────────────────────────
+Add Flask endpoints:
+
+GET /review
+- returns JSON list of recent signals with basic metadata and whether already executed
+
+POST /review/approve
+Body: { "post_id": "...", "mode": "paper" | "live" }
+- performs build intent + preflight + execute + logs
+- returns JSON with preflight + trade_intent + execution_result + message
+
+POST /review/reject
+Body: { "post_id": "...", "notes": "..." }
+- records rejection
+- returns success
+
+(You may keep everything on the "/" page and call these endpoints via fetch.)
+
+────────────────────────────────────────
+F) Acceptance Criteria
+────────────────────────────────────────
+1) Review Queue table loads and shows the most recent signals.
+2) Clicking Approve (Paper):
+   - runs preflight checks
+   - blocks if incomplete/unsupported/duplicate
+   - executes if ok and logs everything
+3) Clicking Approve (Live):
+   - ALWAYS blocks unless LIVE_TRADING=true
+4) Dedupe works:
+   - approving the same post twice is blocked
+5) Rejections are recorded with notes
+6) No secrets are exposed anywhere.
+7) Existing features remain working (reports, broker tests, execute last signal).
+
+Implement cleanly; add any small helper utilities needed.

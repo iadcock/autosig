@@ -224,6 +224,111 @@ HTML_TEMPLATE = """
             gap: 10px;
             flex-wrap: wrap;
         }
+        
+        /* Review Queue Styles */
+        .review-queue {
+            margin-top: 20px;
+        }
+        .review-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-top: 15px;
+        }
+        .review-table th, .review-table td {
+            padding: 8px 6px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .review-table th {
+            background: #f5f5f5;
+            font-weight: 600;
+            color: #333;
+        }
+        .review-table tr:hover {
+            background: #f9f9f9;
+        }
+        .review-table .ticker {
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .badge-entry { background: #d4edda; color: #155724; }
+        .badge-exit { background: #fff3cd; color: #856404; }
+        .badge-unknown { background: #e2e3e5; color: #383d41; }
+        .badge-executed { background: #cce5ff; color: #004085; }
+        .badge-pass { background: #d4edda; color: #155724; }
+        .badge-block { background: #f8d7da; color: #721c24; }
+        .badge-pending { background: #e2e3e5; color: #383d41; }
+        
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 11px;
+            min-width: auto;
+            margin: 2px;
+        }
+        .btn-paper { background: linear-gradient(135deg, #17a2b8 0%, #20c997 100%); }
+        .btn-live { background: linear-gradient(135deg, #dc3545 0%, #e85464 100%); }
+        .btn-reject { background: linear-gradient(135deg, #6c757d 0%, #868e96 100%); }
+        .btn-sm:hover:not(:disabled) {
+            transform: translateY(-1px);
+        }
+        
+        .detail-panel {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            display: none;
+        }
+        .detail-panel.visible {
+            display: block;
+        }
+        .detail-section {
+            margin-bottom: 15px;
+        }
+        .detail-section h4 {
+            margin: 0 0 8px 0;
+            color: #495057;
+            font-size: 13px;
+        }
+        .detail-section pre {
+            background: #fff;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            overflow-x: auto;
+            margin: 0;
+        }
+        .checks-table {
+            width: 100%;
+            font-size: 11px;
+        }
+        .checks-table td {
+            padding: 4px 8px;
+        }
+        .check-pass { color: #28a745; }
+        .check-fail { color: #dc3545; }
+        
+        .refresh-btn {
+            background: #6c757d;
+            padding: 8px 16px;
+            font-size: 12px;
+            min-width: auto;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -266,6 +371,21 @@ HTML_TEMPLATE = """
         </button>
         
         <div id="results-paper" class="results-container" style="display: none;"></div>
+        
+        <h2>Review Queue</h2>
+        <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+            Review recent signals and approve for paper or live execution, or reject.
+        </p>
+        
+        <button class="btn refresh-btn" onclick="loadReviewQueue()">
+            Refresh Queue
+        </button>
+        
+        <div id="review-queue-container">
+            <div class="empty-state">Loading signals...</div>
+        </div>
+        
+        <div id="review-detail-panel" class="detail-panel"></div>
         
         <div class="info">
             <h3>Report Contents</h3>
@@ -517,6 +637,243 @@ HTML_TEMPLATE = """
             div.textContent = text;
             return div.innerHTML;
         }
+        
+        // Review Queue Functions
+        let reviewSignals = [];
+        
+        function loadReviewQueue() {
+            const container = document.getElementById('review-queue-container');
+            container.innerHTML = '<div class="empty-state">Loading signals...</div>';
+            
+            fetch('/review')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success || !data.signals || data.signals.length === 0) {
+                        container.innerHTML = '<div class="empty-state">No signals found</div>';
+                        return;
+                    }
+                    
+                    reviewSignals = data.signals;
+                    renderReviewTable(data.signals);
+                })
+                .catch(error => {
+                    container.innerHTML = `<div class="empty-state" style="color: #dc3545;">Error loading signals: ${error.message}</div>`;
+                });
+        }
+        
+        function renderReviewTable(signals) {
+            const container = document.getElementById('review-queue-container');
+            
+            let html = `
+                <table class="review-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Ticker</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            for (const sig of signals) {
+                const time = sig.ts_iso ? new Date(sig.ts_iso).toLocaleString() : '-';
+                const ticker = sig.ticker || sig.parsed_signal?.ticker || '-';
+                const signalType = sig.signal_type || 'UNKNOWN';
+                const isSignal = sig.classification === 'SIGNAL';
+                const executed = sig.already_executed;
+                
+                const typeBadge = signalType === 'ENTRY' ? 'badge-entry' : 
+                                  signalType === 'EXIT' ? 'badge-exit' : 'badge-unknown';
+                
+                let statusHtml = '';
+                if (executed) {
+                    statusHtml = '<span class="badge badge-executed">EXECUTED</span>';
+                } else if (!isSignal) {
+                    statusHtml = '<span class="badge badge-unknown">NOT SIGNAL</span>';
+                } else {
+                    statusHtml = '<span class="badge badge-pending">PENDING</span>';
+                }
+                
+                const postId = sig.post_id || '';
+                const canApprove = isSignal && !executed;
+                
+                html += `
+                    <tr data-post-id="${escapeHtml(postId)}">
+                        <td style="font-size: 11px;">${escapeHtml(time)}</td>
+                        <td class="ticker">${escapeHtml(ticker)}</td>
+                        <td><span class="badge ${typeBadge}">${signalType}</span></td>
+                        <td>${statusHtml}</td>
+                        <td>
+                            <button class="btn btn-sm btn-paper" onclick="approveSignal('${escapeHtml(postId)}', 'paper')" ${canApprove ? '' : 'disabled'}>
+                                Paper
+                            </button>
+                            <button class="btn btn-sm btn-live" onclick="approveSignal('${escapeHtml(postId)}', 'live')" ${canApprove ? '' : 'disabled'}>
+                                Live
+                            </button>
+                            <button class="btn btn-sm btn-reject" onclick="rejectSignal('${escapeHtml(postId)}')" ${isSignal && !executed ? '' : 'disabled'}>
+                                Reject
+                            </button>
+                            <button class="btn btn-sm" onclick="showDetails('${escapeHtml(postId)}')" style="background: #6c757d;">
+                                Details
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+        
+        function approveSignal(postId, mode) {
+            const btns = document.querySelectorAll(`tr[data-post-id="${postId}"] button`);
+            btns.forEach(btn => btn.disabled = true);
+            
+            const detailPanel = document.getElementById('review-detail-panel');
+            detailPanel.innerHTML = '<div style="padding: 20px; text-align: center;">Processing...</div>';
+            detailPanel.classList.add('visible');
+            
+            fetch('/review/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ post_id: postId, mode: mode })
+            })
+            .then(response => response.json())
+            .then(data => {
+                renderApprovalResult(data, mode);
+                if (data.success) {
+                    loadReviewQueue();
+                } else {
+                    btns.forEach(btn => btn.disabled = false);
+                }
+            })
+            .catch(error => {
+                detailPanel.innerHTML = `<div style="color: #dc3545; padding: 20px;">Error: ${error.message}</div>`;
+                btns.forEach(btn => btn.disabled = false);
+            });
+        }
+        
+        function renderApprovalResult(data, mode) {
+            const detailPanel = document.getElementById('review-detail-panel');
+            
+            const statusClass = data.success ? 'check-pass' : 'check-fail';
+            const statusIcon = data.success ? '✓' : '✗';
+            
+            let checksHtml = '';
+            if (data.preflight_result && data.preflight_result.checks) {
+                checksHtml = '<table class="checks-table">';
+                for (const check of data.preflight_result.checks) {
+                    const checkClass = check.ok ? 'check-pass' : 'check-fail';
+                    const icon = check.ok ? '✓' : '✗';
+                    checksHtml += `<tr><td class="${checkClass}">${icon}</td><td>${escapeHtml(check.name)}</td><td>${escapeHtml(check.summary)}</td></tr>`;
+                }
+                checksHtml += '</table>';
+            }
+            
+            let warningsHtml = '';
+            if (data.preflight_result && data.preflight_result.warnings && data.preflight_result.warnings.length > 0) {
+                warningsHtml = '<div style="background: #fff3cd; padding: 8px; border-radius: 4px; margin-top: 10px;">';
+                for (const w of data.preflight_result.warnings) {
+                    warningsHtml += `<div style="color: #856404;">⚠ ${escapeHtml(w)}</div>`;
+                }
+                warningsHtml += '</div>';
+            }
+            
+            detailPanel.innerHTML = `
+                <div class="detail-section">
+                    <h4>Approval Result: <span class="${statusClass}">${statusIcon} ${data.success ? 'SUCCESS' : 'FAILED'}</span></h4>
+                    <p>${escapeHtml(data.message || '')}</p>
+                    ${data.blocked_reason ? `<p style="color: #dc3545;"><strong>Blocked:</strong> ${escapeHtml(data.blocked_reason)}</p>` : ''}
+                </div>
+                
+                ${checksHtml ? `<div class="detail-section"><h4>Preflight Checks</h4>${checksHtml}${warningsHtml}</div>` : ''}
+                
+                ${data.trade_intent ? `<div class="detail-section"><h4>Trade Intent</h4><pre>${JSON.stringify(data.trade_intent, null, 2)}</pre></div>` : ''}
+                
+                ${data.execution_result ? `<div class="detail-section"><h4>Execution Result</h4><pre>${JSON.stringify(data.execution_result, null, 2)}</pre></div>` : ''}
+            `;
+            detailPanel.classList.add('visible');
+        }
+        
+        function rejectSignal(postId) {
+            const notes = prompt('Enter rejection reason:');
+            if (!notes || notes.trim() === '') {
+                alert('Rejection reason is required');
+                return;
+            }
+            
+            fetch('/review/reject', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ post_id: postId, notes: notes })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Signal rejected');
+                    loadReviewQueue();
+                } else {
+                    alert('Error: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                alert('Error: ' + error.message);
+            });
+        }
+        
+        function showDetails(postId) {
+            const signal = reviewSignals.find(s => s.post_id === postId);
+            if (!signal) {
+                alert('Signal not found');
+                return;
+            }
+            
+            const detailPanel = document.getElementById('review-detail-panel');
+            
+            let executionInfo = '';
+            if (signal.already_executed && signal.execution_info) {
+                executionInfo = `
+                    <div class="detail-section">
+                        <h4>Execution Info (Already Executed)</h4>
+                        <pre>${JSON.stringify(signal.execution_info, null, 2)}</pre>
+                    </div>
+                `;
+            }
+            
+            detailPanel.innerHTML = `
+                <div class="detail-section">
+                    <h4>Post ID</h4>
+                    <p style="font-family: monospace; font-size: 11px; word-break: break-all;">${escapeHtml(signal.post_id || '')}</p>
+                </div>
+                
+                <div class="detail-section">
+                    <h4>Raw Excerpt</h4>
+                    <pre style="white-space: pre-wrap;">${escapeHtml(signal.raw_excerpt || '')}</pre>
+                </div>
+                
+                <div class="detail-section">
+                    <h4>Parsed Signal</h4>
+                    <pre>${JSON.stringify(signal.parsed_signal || {}, null, 2)}</pre>
+                </div>
+                
+                <div class="detail-section">
+                    <h4>Classification</h4>
+                    <p><span class="badge ${signal.classification === 'SIGNAL' ? 'badge-entry' : 'badge-unknown'}">${escapeHtml(signal.classification || 'UNKNOWN')}</span>
+                    &nbsp;&nbsp;Signal Type: <span class="badge ${signal.signal_type === 'ENTRY' ? 'badge-entry' : signal.signal_type === 'EXIT' ? 'badge-exit' : 'badge-unknown'}">${escapeHtml(signal.signal_type || 'UNKNOWN')}</span></p>
+                </div>
+                
+                ${executionInfo}
+            `;
+            detailPanel.classList.add('visible');
+        }
+        
+        // Load review queue on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadReviewQueue();
+        });
     </script>
 </body>
 </html>
@@ -733,6 +1090,249 @@ def execute_paper_last_signal():
             "parsed_signal": parsed_signal,
             "timestamp": datetime.utcnow().isoformat()
         })
+
+
+@app.route("/review")
+def get_review_queue():
+    """
+    Get list of recent parsed signals for review.
+    Returns JSON with signal metadata and execution status.
+    """
+    from review_queue import list_recent_signals
+    
+    signals = list_recent_signals(limit=25)
+    return jsonify({
+        "success": True,
+        "signals": signals,
+        "count": len(signals)
+    })
+
+
+@app.route("/review/approve", methods=["POST"])
+def approve_signal():
+    """
+    Approve and execute a signal in paper or live mode.
+    
+    Body: { "post_id": "...", "mode": "paper" | "live" }
+    """
+    from datetime import datetime
+    from review_queue import list_recent_signals, build_intent_and_preflight, record_review_action
+    from dedupe_store import is_executed, mark_executed
+    from trade_intent import TradeIntent, OptionLeg
+    
+    data = request.get_json() or {}
+    post_id = data.get("post_id", "")
+    mode = data.get("mode", "paper").lower()
+    
+    if not post_id:
+        return jsonify({
+            "success": False,
+            "message": "Missing post_id"
+        }), 400
+    
+    if mode not in ("paper", "live"):
+        return jsonify({
+            "success": False,
+            "message": "Mode must be 'paper' or 'live'"
+        }), 400
+    
+    if is_executed(post_id):
+        return jsonify({
+            "success": False,
+            "message": "Signal already executed (duplicate)",
+            "blocked_reason": "Duplicate execution blocked"
+        })
+    
+    signals = list_recent_signals(limit=100)
+    entry = None
+    for sig in signals:
+        if sig.get("post_id") == post_id:
+            entry = sig
+            break
+    
+    if not entry:
+        return jsonify({
+            "success": False,
+            "message": f"Signal not found: {post_id[:30]}..."
+        }), 404
+    
+    result = build_intent_and_preflight(entry, mode)
+    
+    trade_intent_dict = result.get("trade_intent")
+    intent_error = result.get("trade_intent_error")
+    preflight_result = result.get("preflight_result")
+    matched_position_id = result.get("matched_position_id")
+    
+    if not trade_intent_dict:
+        action_type = "APPROVE_LIVE" if mode == "live" else "APPROVE_PAPER"
+        record_review_action(
+            post_id=post_id,
+            action=action_type,
+            mode=mode,
+            notes=f"Failed to build intent: {intent_error}",
+            preflight=None,
+            result=None,
+            ticker=entry.get("ticker", "")
+        )
+        return jsonify({
+            "success": False,
+            "message": intent_error or "Could not build TradeIntent",
+            "preflight_result": None,
+            "trade_intent": None
+        })
+    
+    if preflight_result and not preflight_result.get("ok"):
+        action_type = "APPROVE_LIVE" if mode == "live" else "APPROVE_PAPER"
+        record_review_action(
+            post_id=post_id,
+            action=action_type,
+            mode=mode,
+            notes=f"Preflight blocked: {preflight_result.get('blocked_reason')}",
+            preflight=preflight_result,
+            result=None,
+            ticker=entry.get("ticker", "")
+        )
+        return jsonify({
+            "success": False,
+            "message": "Preflight checks failed",
+            "blocked_reason": preflight_result.get("blocked_reason"),
+            "preflight_result": preflight_result,
+            "trade_intent": trade_intent_dict
+        })
+    
+    try:
+        legs = [
+            OptionLeg(
+                side=leg["side"],
+                quantity=leg["quantity"],
+                strike=leg["strike"],
+                option_type=leg["option_type"],
+                expiration=leg["expiration"]
+            )
+            for leg in trade_intent_dict.get("legs", [])
+        ]
+        
+        trade_intent = TradeIntent(
+            id=trade_intent_dict.get("id"),
+            execution_mode=trade_intent_dict.get("execution_mode", mode.upper()),
+            instrument_type=trade_intent_dict.get("instrument_type", "option"),
+            underlying=trade_intent_dict.get("underlying", ""),
+            action=trade_intent_dict.get("action", "BUY_TO_OPEN"),
+            order_type=trade_intent_dict.get("order_type", "MARKET"),
+            limit_price=trade_intent_dict.get("limit_price"),
+            quantity=trade_intent_dict.get("quantity", 1),
+            legs=legs,
+            raw_signal=trade_intent_dict.get("raw_signal", ""),
+            metadata=trade_intent_dict.get("metadata", {})
+        )
+        
+        execution_result = execute_trade(trade_intent)
+        
+        mark_executed(
+            post_id=post_id,
+            execution_mode=mode,
+            trade_intent_id=trade_intent.id,
+            result_status=execution_result.status,
+            underlying=trade_intent.underlying,
+            action=trade_intent.action
+        )
+        
+        execution_plan = build_execution_plan(
+            trade_intent=trade_intent,
+            execution_result=execution_result,
+            source_post_id=post_id,
+            action="PLACE_ORDER",
+            signal_type=entry.get("signal_type", "UNKNOWN"),
+            matched_position_id=matched_position_id
+        )
+        log_execution_plan(execution_plan)
+        
+        action_type = "APPROVE_LIVE" if mode == "live" else "APPROVE_PAPER"
+        result_dict = {
+            "status": execution_result.status,
+            "broker": execution_result.broker,
+            "order_id": execution_result.order_id,
+            "message": execution_result.message,
+            "fill_price": execution_result.fill_price,
+            "filled_quantity": execution_result.filled_quantity
+        }
+        
+        record_review_action(
+            post_id=post_id,
+            action=action_type,
+            mode=mode,
+            notes="Executed successfully",
+            trade_intent_id=trade_intent.id,
+            preflight=preflight_result,
+            result=result_dict,
+            ticker=trade_intent.underlying
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": f"Executed in {mode} mode",
+            "trade_intent": trade_intent_dict,
+            "preflight_result": preflight_result,
+            "execution_result": result_dict,
+            "matched_position_id": matched_position_id,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Execution error: {str(e)}",
+            "trade_intent": trade_intent_dict,
+            "preflight_result": preflight_result
+        })
+
+
+@app.route("/review/reject", methods=["POST"])
+def reject_signal():
+    """
+    Reject a signal with notes.
+    
+    Body: { "post_id": "...", "notes": "..." }
+    """
+    from review_queue import record_review_action, list_recent_signals
+    
+    data = request.get_json() or {}
+    post_id = data.get("post_id", "")
+    notes = data.get("notes", "").strip()
+    
+    if not post_id:
+        return jsonify({
+            "success": False,
+            "message": "Missing post_id"
+        }), 400
+    
+    if not notes:
+        return jsonify({
+            "success": False,
+            "message": "Notes are required for rejection"
+        }), 400
+    
+    signals = list_recent_signals(limit=100)
+    ticker = ""
+    for sig in signals:
+        if sig.get("post_id") == post_id:
+            ticker = sig.get("ticker", "")
+            break
+    
+    record_review_action(
+        post_id=post_id,
+        action="REJECT",
+        mode=None,
+        notes=notes,
+        ticker=ticker
+    )
+    
+    return jsonify({
+        "success": True,
+        "message": "Signal rejected",
+        "post_id": post_id,
+        "notes": notes
+    })
 
 
 if __name__ == "__main__":

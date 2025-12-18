@@ -6,6 +6,16 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-18: Added pre-flight gate, idempotency/dedupe, and review queue
+  - New module: preflight.py - 6 safety checks before any execution
+    - Completeness, supported assets, risk controls, DTE guard, mode guard, dedupe
+  - New module: dedupe_store.py - JSONL-backed executed signal tracking
+  - New module: review_queue.py - list signals, build intents with preflight, record actions
+  - Review Queue UI with Paper/Live/Reject buttons for each signal
+  - Preflight checks displayed with pass/fail indicators
+  - Live trading always blocked unless LIVE_TRADING=true
+  - Duplicate execution prevented via post_id tracking
+  - New env vars: MAX_RISK_PCT_PER_TRADE, MAX_DAILY_RISK_PCT, MAX_OPEN_POSITIONS, ALLOW_0DTE_SPX
 - 2024-12-17: Implemented paper position tracking and smart EXIT handling
   - New module: paper_positions.py - JSONL-backed position store with open/close tracking
   - Signal type classification: ENTRY, EXIT, UNKNOWN
@@ -81,6 +91,9 @@ An automated trading bot that processes options trade alerts from Whop and execu
 | `execution_plan.py` | Builds and logs execution plans |
 | `env_loader.py` | Centralized environment variable loader |
 | `paper_positions.py` | Paper position tracking (JSONL store) |
+| `preflight.py` | Pre-flight safety checks before execution |
+| `dedupe_store.py` | Idempotency tracking for executed signals |
+| `review_queue.py` | Review queue for signal approval workflow |
 
 ### Data Flow
 
