@@ -186,7 +186,7 @@ def _intent_to_dict(intent_obj) -> dict:
 
 def record_review_action(
     post_id: str,
-    action: Literal["APPROVE_PAPER", "APPROVE_LIVE", "REJECT"],
+    action: Literal["APPROVE_PAPER", "APPROVE_LIVE", "REJECT", "AUTO_PAPER"],
     mode: Optional[str] = None,
     notes: Optional[str] = None,
     trade_intent_id: Optional[str] = None,
@@ -195,11 +195,11 @@ def record_review_action(
     ticker: Optional[str] = None
 ) -> None:
     """
-    Record a review action (approve/reject) to the review actions log.
+    Record a review action (approve/reject/auto) to the review actions log.
     
     Args:
         post_id: The signal post ID
-        action: APPROVE_PAPER, APPROVE_LIVE, or REJECT
+        action: APPROVE_PAPER, APPROVE_LIVE, REJECT, or AUTO_PAPER
         mode: Execution mode (paper/live)
         notes: Optional notes (required for REJECT)
         trade_intent_id: Trade intent ID if executed

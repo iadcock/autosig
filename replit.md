@@ -6,6 +6,21 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-18: Added Broker Health Checks, Auto Mode, and PAPER Mirroring
+  - New module: broker_health_checks.py - connectivity checks without trading
+    - alpaca_health_check(): account, clock, SPY snapshot
+    - tradier_health_check(): profile, quote, expirations, option chain
+  - New module: market_window.py - trading window detection (market hours ±1hr buffer)
+  - New module: auto_mode.py - automated PAPER trading with rate limits
+    - AUTO MODE is PAPER ONLY - never places live trades
+    - Trading window enforced via Alpaca market clock
+    - Configurable limits: MAX_TRADES_PER_DAY, MAX_TRADES_PER_HOUR
+    - Counters stored in data/auto_counters.json
+  - New module: alpaca_option_resolver.py - option contract resolution via Alpaca API
+  - PAPER mirroring config (PAPER_MIRROR_ENABLED) for dual-broker paper trades
+  - Dashboard: Health Check buttons, Auto Mode toggle panel
+  - Endpoints: /health/alpaca, /health/tradier, /auto/status, /auto/toggle, /config
+  - Alpaca smoke test updated with SKIPPED_PAPER status for timing-limited steps
 - 2024-12-18: Added pre-flight gate, idempotency/dedupe, and review queue
   - New module: preflight.py - 6 safety checks before any execution
     - Completeness, supported assets, risk controls, DTE guard, mode guard, dedupe

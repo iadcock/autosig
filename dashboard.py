@@ -361,6 +361,50 @@ HTML_TEMPLATE = """
         <div id="results-alpaca" class="results-container" style="display: none;"></div>
         <div id="results-tradier" class="results-container" style="display: none;"></div>
         
+        <hr>
+        
+        <h2>Broker Health Checks</h2>
+        <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+            Quick connectivity checks (no trading).
+        </p>
+        
+        <div class="button-row">
+            <button id="btn-health-alpaca" class="btn btn-test" onclick="runHealthCheck('alpaca')">
+                Alpaca Health Check
+            </button>
+            <button id="btn-health-tradier" class="btn btn-test" onclick="runHealthCheck('tradier')">
+                Tradier Health Check
+            </button>
+        </div>
+        
+        <div id="results-health-alpaca" class="results-container" style="display: none;"></div>
+        <div id="results-health-tradier" class="results-container" style="display: none;"></div>
+        
+        <hr>
+        
+        <h2>Auto Mode</h2>
+        <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+            Auto Mode runs PAPER ONLY during market hours (±1 hour buffer).
+        </p>
+        
+        <div class="button-row">
+            <button id="btn-auto-toggle" class="btn btn-test" onclick="toggleAutoMode()">
+                Enable Auto Mode
+            </button>
+            <button class="btn" onclick="refreshAutoStatus()" style="background: #6c757d;">
+                Refresh Status
+            </button>
+        </div>
+        
+        <div id="auto-status-panel" class="info" style="margin-top: 15px;">
+            <p><strong>Status:</strong> <span id="auto-status-text">Loading...</span></p>
+            <p><strong>Trading Window:</strong> <span id="auto-window-text">-</span></p>
+            <p><strong>Trades Today:</strong> <span id="auto-trades-today">-</span></p>
+            <p><strong>Trades This Hour:</strong> <span id="auto-trades-hour">-</span></p>
+            <p><strong>Last Tick:</strong> <span id="auto-last-tick">-</span></p>
+            <p><strong>Last Action:</strong> <span id="auto-last-action">-</span></p>
+        </div>
+        
         <h2>Paper Trading</h2>
         <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
             Execute the last parsed signal in paper (simulated) mode.
@@ -876,7 +920,141 @@ HTML_TEMPLATE = """
         // Load review queue on page load
         document.addEventListener('DOMContentLoaded', function() {
             loadReviewQueue();
+            refreshAutoStatus();
         });
+        
+        // Health Check Functions
+        function runHealthCheck(broker) {
+            const btn = document.getElementById('btn-health-' + broker);
+            const resultsDiv = document.getElementById('results-health-' + broker);
+            
+            btn.disabled = true;
+            btn.className = 'btn btn-test running';
+            btn.innerHTML = '<span class="spinner"></span>Checking...';
+            resultsDiv.style.display = 'none';
+            
+            fetch('/health/' + broker, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    btn.className = 'btn btn-test success';
+                    btn.innerHTML = 'Healthy';
+                } else {
+                    btn.className = 'btn btn-test failure';
+                    btn.innerHTML = 'Issues Found';
+                }
+                
+                renderHealthResults(broker, data);
+                
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.className = 'btn btn-test';
+                    btn.innerHTML = broker.charAt(0).toUpperCase() + broker.slice(1) + ' Health Check';
+                }, 2000);
+            })
+            .catch(error => {
+                btn.className = 'btn btn-test failure';
+                btn.innerHTML = 'Error';
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.className = 'btn btn-test';
+                    btn.innerHTML = broker.charAt(0).toUpperCase() + broker.slice(1) + ' Health Check';
+                }, 2000);
+            });
+        }
+        
+        function renderHealthResults(broker, data) {
+            const resultsDiv = document.getElementById('results-health-' + broker);
+            
+            let tableRows = '';
+            for (const step of data.steps) {
+                const okClass = step.ok ? 'step-ok' : 'step-fail';
+                const okText = step.ok ? '\\u2713' : '\\u2717';
+                tableRows += '<tr><td>' + step.name + '</td><td class="' + okClass + '">' + okText + '</td><td>' + (step.status || '-') + '</td><td>' + step.summary + '</td></tr>';
+            }
+            
+            const brokerName = broker.charAt(0).toUpperCase() + broker.slice(1);
+            const statusClass = data.success ? 'step-ok' : 'step-fail';
+            const statusText = data.success ? 'HEALTHY' : 'ISSUES';
+            
+            resultsDiv.innerHTML = '<div class="results-header"><h4>' + brokerName + ': <span class="' + statusClass + '">' + statusText + '</span></h4></div><table class="results-table"><thead><tr><th>Step</th><th>OK</th><th>Status</th><th>Summary</th></tr></thead><tbody>' + tableRows + '</tbody></table>';
+            resultsDiv.style.display = 'block';
+        }
+        
+        // Auto Mode Functions
+        let autoModeEnabled = false;
+        
+        function refreshAutoStatus() {
+            fetch('/auto/status')
+            .then(response => response.json())
+            .then(data => {
+                autoModeEnabled = data.enabled;
+                
+                const btn = document.getElementById('btn-auto-toggle');
+                if (data.enabled) {
+                    btn.className = 'btn btn-test success';
+                    btn.innerHTML = 'Disable Auto Mode';
+                } else {
+                    btn.className = 'btn btn-test';
+                    btn.innerHTML = 'Enable Auto Mode';
+                }
+                
+                document.getElementById('auto-status-text').textContent = data.enabled ? 'RUNNING' : 'STOPPED';
+                document.getElementById('auto-status-text').style.color = data.enabled ? '#28a745' : '#6c757d';
+                
+                const ws = data.window_status || {};
+                let windowText = ws.within_window ? 'OPEN' : 'CLOSED';
+                if (ws.window_start && ws.window_end) {
+                    windowText += ' (' + ws.window_start + ' - ' + ws.window_end + ')';
+                }
+                document.getElementById('auto-window-text').textContent = windowText;
+                
+                document.getElementById('auto-trades-today').textContent = (data.trades_today || 0) + ' / ' + (data.max_daily || 10);
+                document.getElementById('auto-trades-hour').textContent = (data.trades_this_hour || 0) + ' / ' + (data.max_hourly || 3);
+                document.getElementById('auto-last-tick').textContent = data.last_tick_time || 'Never';
+                document.getElementById('auto-last-action').textContent = data.last_action || 'None';
+            })
+            .catch(error => {
+                document.getElementById('auto-status-text').textContent = 'Error';
+            });
+        }
+        
+        function toggleAutoMode() {
+            const btn = document.getElementById('btn-auto-toggle');
+            const newState = !autoModeEnabled;
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>Toggling...';
+            
+            fetch('/auto/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: newState })
+            })
+            .then(response => response.json())
+            .then(data => {
+                autoModeEnabled = data.enabled;
+                btn.disabled = false;
+                
+                if (data.enabled) {
+                    btn.className = 'btn btn-test success';
+                    btn.innerHTML = 'Disable Auto Mode';
+                } else {
+                    btn.className = 'btn btn-test';
+                    btn.innerHTML = 'Enable Auto Mode';
+                }
+                
+                refreshAutoStatus();
+            })
+            .catch(error => {
+                btn.disabled = false;
+                btn.className = 'btn btn-test failure';
+                btn.innerHTML = 'Error';
+            });
+        }
     </script>
 </body>
 </html>
@@ -1336,6 +1514,67 @@ def reject_signal():
         "post_id": post_id,
         "notes": notes
     })
+
+
+@app.route("/health/alpaca", methods=["POST"])
+def health_check_alpaca():
+    """Run Alpaca health check (no trading)."""
+    from broker_health_checks import alpaca_health_check
+    result = alpaca_health_check()
+    return jsonify(result)
+
+
+@app.route("/health/tradier", methods=["POST"])
+def health_check_tradier():
+    """Run Tradier health check (no trading)."""
+    from broker_health_checks import tradier_health_check
+    result = tradier_health_check()
+    return jsonify(result)
+
+
+@app.route("/config", methods=["GET"])
+def get_config():
+    """Get current configuration (no secrets)."""
+    from env_loader import load_env
+    return jsonify({
+        "paper_mirror_enabled": (load_env("PAPER_MIRROR_ENABLED") or "").lower() == "true",
+        "primary_live_broker": load_env("PRIMARY_LIVE_BROKER") or "tradier",
+        "live_trading": (load_env("LIVE_TRADING") or "").lower() == "true",
+        "auto_mode_enabled": (load_env("AUTO_MODE_ENABLED") or "").lower() == "true",
+        "auto_poll_seconds": int(load_env("AUTO_POLL_SECONDS") or "30"),
+        "auto_window_buffer_minutes": int(load_env("AUTO_WINDOW_BUFFER_MINUTES") or "60"),
+        "auto_max_trades_per_day": int(load_env("AUTO_MAX_TRADES_PER_DAY") or "10"),
+        "auto_max_trades_per_hour": int(load_env("AUTO_MAX_TRADES_PER_HOUR") or "3")
+    })
+
+
+@app.route("/config/paper_mirror", methods=["POST"])
+def set_paper_mirror():
+    """Toggle paper mirror setting (runtime only)."""
+    data = request.get_json() or {}
+    enabled = data.get("enabled", False)
+    os.environ["PAPER_MIRROR_ENABLED"] = "true" if enabled else "false"
+    return jsonify({
+        "success": True,
+        "paper_mirror_enabled": enabled
+    })
+
+
+@app.route("/auto/status", methods=["GET"])
+def get_auto_status():
+    """Get auto mode status."""
+    from auto_mode import get_auto_status
+    return jsonify(get_auto_status())
+
+
+@app.route("/auto/toggle", methods=["POST"])
+def toggle_auto_mode():
+    """Toggle auto mode on/off."""
+    from auto_mode import set_auto_enabled
+    data = request.get_json() or {}
+    enabled = data.get("enabled", False)
+    status = set_auto_enabled(enabled)
+    return jsonify(status)
 
 
 if __name__ == "__main__":

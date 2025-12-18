@@ -1,0 +1,202 @@
+Implement Broker Health Checks + PAPER Mirroring + AUTO MODE execution
+during trading hours with a ±1 hour buffer.
+
+CONTEXT:
+- We have Whop ingestion + parsing → TradeIntent → preflight → dedupe → execution router.
+- Tradier is the primary broker (supports SPX options).
+- Alpaca is used for equities and high-quality paper testing.
+- LIVE trading must NEVER be mirrored.
+- AUTO MODE must be PAPER ONLY.
+
+────────────────────────────────────────
+A) Broker Health Checks (NO TRADING)
+────────────────────────────────────────
+Create file: broker_health_checks.py
+
+Implement:
+- alpaca_health_check()
+- tradier_health_check()
+
+Return format:
+{
+  "broker": "alpaca" | "tradier",
+  "success": true/false,
+  "timestamp": "<iso>",
+  "steps": [
+    { "name": str, "ok": bool, "status": int|str, "summary": str, "details": str|null }
+  ]
+}
+
+ALPACA health steps (NO orders):
+1) GET /v2/account
+2) GET /v2/clock
+3) GET stock snapshot for SPY:
+   https://data.alpaca.markets/v2/stocks/SPY/snapshot
+
+TRADIER health steps (NO orders):
+1) GET /v1/user/profile (or accounts endpoint)
+2) GET quote for SPY
+3) GET SPX option expirations
+4) GET SPX option chain (fallback to SPY if SPX fails)
+
+Health checks must:
+- use 10s timeouts
+- never place orders
+- never expose secrets
+- success=true only if ALL steps pass
+
+Add endpoints:
+POST /health/alpaca
+POST /health/tradier
+
+Add dashboard buttons:
+- “Alpaca Health Check”
+- “Tradier Health Check”
+Buttons must show spinner → green success / red failure.
+
+────────────────────────────────────────
+B) PAPER Mirroring Configuration
+────────────────────────────────────────
+Add config flags (env defaults):
+- PAPER_MIRROR_ENABLED=false
+- PRIMARY_LIVE_BROKER=tradier
+- LIVE_TRADING=false   (hard safety default)
+
+Add endpoints:
+POST /config/paper_mirror { enabled: true|false }
+GET  /config  -> returns mirror + auto status (no secrets)
+
+Behavior:
+- PAPER mirroring means:
+   ONE TradeIntent
+   → executed on Tradier paper/sandbox
+   → ALSO executed on Alpaca paper IF supported
+- LIVE trades are NEVER mirrored.
+
+Support rules:
+- SPX index options → Tradier ONLY
+- Stocks / ETFs → Tradier + Alpaca
+- Equity/ETF options:
+   - Try Alpaca option resolution
+   - If contract not found → SKIP Alpaca with reason
+
+Log both primary + mirror results under same post_id.
+
+────────────────────────────────────────
+C) Alpaca Option Resolution Helper
+────────────────────────────────────────
+Create file: alpaca_option_resolver.py
+
+Implement:
+resolve_alpaca_option_contract(
+  underlying,
+  expiration,
+  strike,
+  option_type
+) -> contract_symbol | None
+
+Use Alpaca options endpoint:
+GET /v2/options/contracts
+Filter by:
+- underlying_symbols
+- expiration_date
+- call/put
+- strike
+
+DO NOT use /v2/assets for options.
+If not found, return None with clear skip reason.
+
+────────────────────────────────────────
+D) AUTO MODE with Trading Window (±1 hour)
+────────────────────────────────────────
+AUTO MODE is PAPER ONLY and mirrors to both brokers.
+
+Add env defaults:
+- AUTO_MODE_ENABLED=false
+- AUTO_POLL_SECONDS=30
+- AUTO_WINDOW_BUFFER_MINUTES=60
+- TIMEZONE=America/New_York
+- AUTO_MAX_TRADES_PER_DAY=10
+- AUTO_MAX_TRADES_PER_HOUR=3
+
+Create file: market_window.py
+
+Implement:
+is_within_auto_trading_window(now_dt) -> {
+  within_window: bool,
+  reason: str,
+  market_open_time,
+  market_close_time,
+  window_start,
+  window_end
+}
+
+Use Alpaca market clock:
+GET /v2/clock
+
+window_start = market_open - buffer
+window_end   = market_close + buffer
+
+If clock fails → fail closed (within_window=false).
+
+────────────────────────────────────────
+E) AUTO MODE Execution Loop
+────────────────────────────────────────
+Create file: auto_mode.py
+
+Implement:
+- start_auto_mode(app)
+- stop_auto_mode()
+- auto_tick()
+
+Auto tick logic:
+1) If AUTO_MODE_ENABLED != true → return
+2) Check trading window:
+   - if outside → pause, log status
+3) Scan parsed alerts newest → oldest
+4) Select next EXECUTABLE signal:
+   - Prefer ENTRY
+   - EXIT only if resolvable to open PAPER position
+5) Enforce dedupe + preflight
+6) Execute ONE trade per tick:
+   - execution_mode=paper
+   - PAPER_MIRROR_ENABLED must be honored
+7) Update counters and logs
+
+Store counters in:
+data/auto_counters.json
+
+AUTO MODE SAFETY:
+- Never execute LIVE
+- Never mirror LIVE
+- If preflight blocks → SKIP and log
+- If market clock fails → pause
+
+────────────────────────────────────────
+F) UI – Auto Mode Panel
+────────────────────────────────────────
+Add an “Auto Mode” card to dashboard:
+
+- Toggle: Auto Mode ON/OFF
+- Display:
+   - Market window status
+   - Window start/end
+   - Last tick time
+   - Last action summary
+   - Trades today / this hour
+- Note: “Auto Mode runs PAPER ONLY and mirrors to both brokers when supported.”
+
+Endpoints:
+POST /auto/toggle { enabled: true|false }
+GET  /auto/status
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+1) Health check buttons validate APIs without trading.
+2) Paper mirror toggle mirrors PAPER trades to both brokers safely.
+3) Alpaca option resolution uses correct endpoints.
+4) Auto mode runs only during open ±1 hour window.
+5) Auto mode never places live trades.
+6) All executions and skips are logged clearly.
+7) UI shows health, mirror state, and auto status clearly.
