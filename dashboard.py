@@ -469,7 +469,10 @@ HTML_TEMPLATE = """
             let tableRows = '';
             for (const step of data.steps) {
                 let okClass, okText;
-                if (step.status === 'SKIPPED_SANDBOX') {
+                const isSkippedPaper = step.summary && step.summary.includes('SKIPPED_PAPER');
+                const isSkippedSandbox = step.status === 'SKIPPED_SANDBOX' || (step.summary && step.summary.includes('SKIPPED_SANDBOX'));
+                
+                if (isSkippedPaper || isSkippedSandbox) {
                     okClass = 'step-warn';
                     okText = '⚠️';
                 } else if (step.ok) {

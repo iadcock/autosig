@@ -1,0 +1,55 @@
+Fix Alpaca paper smoke test so it doesn't falsely fail due to fill/position timing or existing baseline positions.
+
+Current behavior:
+- BUY order accepted but position confirmation fails
+- SELL step says "No position to sell" even when baseline qty exists
+- Overall test marked FAILED incorrectly
+
+Required changes (alpaca_smoke_test):
+
+1) Baseline handling:
+- Before placing BUY, fetch current AAPL position qty (baseline_qty). If position doesn't exist, baseline_qty = 0.
+- Store baseline_qty in the test state.
+
+2) BUY step:
+- Place BUY 1 AAPL market (as now).
+- Record order_id.
+
+3) Poll order status (preferred) with retry/backoff:
+- Add a new step: "Check BUY Order Status"
+- Poll GET /v2/orders/{order_id} up to 8 times with 2s sleep (max ~16s).
+- If status becomes "filled" or "partially_filled", mark ok=true and record filled_qty/filled_avg_price if present.
+- If still "accepted/new" after retries, mark step as SKIPPED_PAPER (not failed) with summary "Order accepted but not filled yet".
+
+4) Confirm position step:
+- Fetch AAPL position qty (current_qty).
+- Compute delta = current_qty - baseline_qty.
+- If delta >= 1 => ok=true ("Position increased by delta").
+- If delta == 0 and order not confirmed filled => mark as SKIPPED_PAPER ("Position not updated yet in paper").
+- Do NOT mark the whole test failed for this.
+
+5) SELL step (safe liquidation rule):
+- Only attempt SELL if delta > 0 (i.e., only sell shares that were added during this test).
+- If delta == 0 => SKIPPED_PAPER with reason "No new shares confirmed from this test; will not sell baseline holdings".
+
+6) Confirm close:
+- If SELL attempted, poll order status similarly and then confirm current_qty returned to baseline_qty.
+- If not attempted, SKIPPED_PAPER.
+
+7) Overall success logic for Alpaca paper:
+REQUIRED steps:
+- Get Account
+- Get Clock
+- Get Asset
+- BUY accepted (HTTP 200 + order id)
+- List Orders
+OPTIONAL / PAPER-LIMITED:
+- Order filled
+- Position delta
+- Sell close flow
+If required steps pass, overall success=true even if optional steps are skipped.
+
+8) UI rendering:
+- Treat SKIPPED_PAPER like warning (⚠️) not failure (❌)
+
+Do NOT sell baseline shares. Do NOT weaken live trading logic (this is paper smoke test behavior).
