@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Trading Bot{% endblock %}
+
+{% block content %}
+<div class="grid-2">
+    <div class="card">
+        <h3 class="card-title">Market Window</h3>
+        <div id="market-status">
+            <div class="stat-box">
+                <div class="stat-value" id="market-window-status">--</div>
+                <div class="stat-label">Market Status</div>
+            </div>
+            <div class="mt-2 text-center text-muted" id="market-times"></div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3 class="card-title">Auto Mode</h3>
+        <div class="stat-box">
+            <div class="stat-value" id="auto-mode-status">--</div>
+            <div class="stat-label">Auto Mode Status</div>
+        </div>
+        <div class="text-center mt-2">
+            <button id="btn-toggle-auto" class="btn btn-sm" onclick="toggleAutoMode()">
+                Toggle Auto Mode
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Trading Activity</h3>
+    <div class="grid-3">
+        <div class="stat-box">
+            <div class="stat-value" id="trades-today">0</div>
+            <div class="stat-label">Trades Today</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value" id="trades-hour">0</div>
+            <div class="stat-label">Trades This Hour</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value" id="open-positions">0</div>
+            <div class="stat-label">Open Positions</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Last Action</h3>
+    <div id="last-action">
+        <p class="text-muted">No recent actions</p>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Quick Links</h3>
+    <div class="btn-row">
+        <a href="/brokers" class="btn btn-gray btn-sm">Broker Health Checks</a>
+        <a href="/review-ui" class="btn btn-gray btn-sm">Review Queue</a>
+        <a href="/report" class="btn btn-gray btn-sm">Generate Report (24h)</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let autoModeEnabled = false;
+
+async function loadDashboardData() {
+    try {
+        const autoStatus = await fetchJSON('/auto/status');
+        autoModeEnabled = autoStatus.enabled || false;
+        
+        document.getElementById('auto-mode-status').textContent = autoModeEnabled ? 'ENABLED' : 'DISABLED';
+        document.getElementById('auto-mode-status').className = 'stat-value ' + (autoModeEnabled ? 'result-ok' : 'result-warn');
+        
+        document.getElementById('trades-today').textContent = autoStatus.trades_today || 0;
+        document.getElementById('trades-hour').textContent = autoStatus.trades_this_hour || 0;
+        
+        if (autoStatus.in_trading_window !== undefined) {
+            const inWindow = autoStatus.in_trading_window;
+            document.getElementById('market-window-status').textContent = inWindow ? 'OPEN' : 'CLOSED';
+            document.getElementById('market-window-status').className = 'stat-value ' + (inWindow ? 'result-ok' : 'result-warn');
+        }
+        
+        if (autoStatus.window_start && autoStatus.window_end) {
+            document.getElementById('market-times').textContent = 
+                `Window: ${autoStatus.window_start} - ${autoStatus.window_end}`;
+        }
+        
+    } catch (error) {
+        console.error('Failed to load dashboard data:', error);
+    }
+    
+    try {
+        const reviewData = await fetchJSON('/review');
+        const pendingCount = reviewData.signals ? reviewData.signals.filter(s => !s.executed).length : 0;
+        document.getElementById('open-positions').textContent = pendingCount;
+    } catch (error) {
+        console.error('Failed to load review data:', error);
+    }
+}
+
+async function toggleAutoMode() {
+    const btn = document.getElementById('btn-toggle-auto');
+    showSpinner(btn, 'Toggling...');
+    
+    try {
+        const result = await postJSON('/auto/toggle', { enabled: !autoModeEnabled });
+        autoModeEnabled = result.enabled;
+        showSuccess(btn, autoModeEnabled ? 'Enabled!' : 'Disabled!');
+        loadDashboardData();
+    } catch (error) {
+        showError(btn, 'Error');
+    }
+}
+
+loadDashboardData();
+setInterval(loadDashboardData, 30000);
+</script>
+{% endblock %}

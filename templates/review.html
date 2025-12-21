@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Review Queue - Trading Bot{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3 class="card-title">Signal Review Queue</h3>
+    <p class="text-muted mb-2">Review and approve/reject parsed trading signals.</p>
+    
+    <div class="btn-row mb-3">
+        <button id="btn-refresh" class="btn btn-sm btn-gray" onclick="loadSignals()">
+            Refresh
+        </button>
+    </div>
+    
+    <div id="signals-table">
+        <p class="text-muted">Loading signals...</p>
+    </div>
+</div>
+
+<div id="detail-panel" class="card hidden">
+    <h3 class="card-title">Signal Details</h3>
+    <div id="detail-content"></div>
+    
+    <div class="btn-row mt-3">
+        <button id="btn-approve-paper" class="btn btn-secondary btn-sm" onclick="approveSignal('paper')">
+            Approve (Paper)
+        </button>
+        <button id="btn-approve-live" class="btn btn-danger btn-sm" onclick="approveSignal('live')">
+            Approve (LIVE)
+        </button>
+        <button id="btn-reject" class="btn btn-gray btn-sm" onclick="showRejectForm()">
+            Reject
+        </button>
+    </div>
+    
+    <div id="reject-form" class="mt-2 hidden">
+        <div class="form-group">
+            <label class="form-label">Rejection Notes</label>
+            <input type="text" id="reject-notes" class="form-input" placeholder="Enter rejection reason...">
+        </div>
+        <button class="btn btn-gray btn-sm" onclick="submitRejection()">Submit Rejection</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let signals = [];
+let selectedSignal = null;
+
+async function loadSignals() {
+    const btn = document.getElementById('btn-refresh');
+    showSpinner(btn, 'Loading...');
+    
+    try {
+        const data = await fetchJSON('/review');
+        signals = data.signals || [];
+        renderSignalsTable();
+        showSuccess(btn, 'Loaded!');
+    } catch (error) {
+        showError(btn, 'Error');
+    }
+}
+
+function renderSignalsTable() {
+    const container = document.getElementById('signals-table');
+    
+    if (signals.length === 0) {
+        container.innerHTML = '<p class="empty-state">No signals to review</p>';
+        return;
+    }
+    
+    let html = `
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Ticker</th>
+                    <th>Type</th>
+                    <th>Strategy</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+    
+    for (const sig of signals) {
+        const statusBadge = sig.executed ? 
+            '<span class="status-badge status-success">Executed</span>' :
+            '<span class="status-badge status-warning">Pending</span>';
+        
+        html += `
+            <tr>
+                <td>${formatTimestamp(sig.parsed_at)}</td>
+                <td><strong>${escapeHtml(sig.ticker || '-')}</strong></td>
+                <td>${escapeHtml(sig.signal_type || '-')}</td>
+                <td>${escapeHtml(sig.strategy || '-')}</td>
+                <td>${statusBadge}</td>
+                <td>
+                    <button class="btn btn-sm" onclick="selectSignal('${sig.post_id}')">
+                        View
+                    </button>
+                </td>
+            </tr>
+        `;
+    }
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function selectSignal(postId) {
+    selectedSignal = signals.find(s => s.post_id === postId);
+    if (!selectedSignal) return;
+    
+    const panel = document.getElementById('detail-panel');
+    const content = document.getElementById('detail-content');
+    
+    content.innerHTML = `
+        <div class="detail-panel">
+            <div class="detail-row">
+                <span class="detail-label">Post ID</span>
+                <span class="detail-value">${escapeHtml(selectedSignal.post_id)}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Ticker</span>
+                <span class="detail-value">${escapeHtml(selectedSignal.ticker || '-')}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Strategy</span>
+                <span class="detail-value">${escapeHtml(selectedSignal.strategy || '-')}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Signal Type</span>
+                <span class="detail-value">${escapeHtml(selectedSignal.signal_type || '-')}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Legs</span>
+                <span class="detail-value">${escapeHtml(JSON.stringify(selectedSignal.legs || []))}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Raw Text</span>
+                <span class="detail-value">${escapeHtml(truncate(selectedSignal.raw_text || '', 200))}</span>
+            </div>
+        </div>
+    `;
+    
+    show(panel);
+    hide('reject-form');
+}
+
+async function approveSignal(mode) {
+    if (!selectedSignal) return;
+    
+    const btn = document.getElementById(mode === 'paper' ? 'btn-approve-paper' : 'btn-approve-live');
+    showSpinner(btn, 'Executing...');
+    
+    try {
+        const result = await postJSON('/review/approve', {
+            post_id: selectedSignal.post_id,
+            mode: mode
+        });
+        
+        if (result.success) {
+            showSuccess(btn, 'Executed!');
+            loadSignals();
+            hide('detail-panel');
+        } else {
+            showError(btn, result.message || 'Failed');
+        }
+    } catch (error) {
+        showError(btn, 'Error');
+    }
+}
+
+function showRejectForm() {
+    toggle('reject-form');
+}
+
+async function submitRejection() {
+    if (!selectedSignal) return;
+    
+    const notes = document.getElementById('reject-notes').value.trim();
+    if (!notes) {
+        alert('Please enter rejection notes');
+        return;
+    }
+    
+    try {
+        const result = await postJSON('/review/reject', {
+            post_id: selectedSignal.post_id,
+            notes: notes
+        });
+        
+        if (result.success) {
+            loadSignals();
+            hide('detail-panel');
+            document.getElementById('reject-notes').value = '';
+        } else {
+            alert(result.message || 'Failed to reject');
+        }
+    } catch (error) {
+        alert('Error rejecting signal');
+    }
+}
+
+loadSignals();
+</script>
+{% endblock %}

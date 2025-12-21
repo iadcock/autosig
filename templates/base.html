@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Trading Bot{% endblock %}</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="nav-brand">Trading Bot</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link {% if active_tab == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="/review-ui" class="nav-link {% if active_tab == 'review' %}active{% endif %}">Review Queue</a>
+            <a href="/brokers" class="nav-link {% if active_tab == 'brokers' %}active{% endif %}">Brokers</a>
+            <a href="/settings" class="nav-link {% if active_tab == 'settings' %}active{% endif %}">Settings</a>
+            <a href="/logs" class="nav-link {% if active_tab == 'logs' %}active{% endif %}">Logs</a>
+        </div>
+        <div class="nav-actions">
+            {% if show_logout %}
+            <a href="/logout" class="nav-btn">Logout</a>
+            {% endif %}
+        </div>
+    </nav>
+
+    {% if warnings %}
+    <div class="warning-banner">
+        <strong>WARNING</strong>
+        <ul>
+            {% for w in warnings %}
+            <li>{{ w }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/app.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

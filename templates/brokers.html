@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Brokers - Trading Bot{% endblock %}
+
+{% block content %}
+<div class="grid-2">
+    <div class="card">
+        <h3 class="card-title">Alpaca (Paper Trading)</h3>
+        <p class="text-muted mb-2">Test connectivity to Alpaca paper trading API.</p>
+        
+        <div class="btn-row">
+            <button id="btn-alpaca-health" class="btn btn-sm" onclick="runHealthCheck('alpaca')">
+                Health Check
+            </button>
+            <button id="btn-alpaca-smoke" class="btn btn-sm btn-secondary" onclick="runSmokeTest('alpaca')">
+                Full Smoke Test
+            </button>
+        </div>
+        
+        <div id="results-alpaca" class="mt-2 hidden"></div>
+    </div>
+    
+    <div class="card">
+        <h3 class="card-title">Tradier (Sandbox)</h3>
+        <p class="text-muted mb-2">Test connectivity to Tradier sandbox API.</p>
+        
+        <div class="btn-row">
+            <button id="btn-tradier-health" class="btn btn-sm" onclick="runHealthCheck('tradier')">
+                Health Check
+            </button>
+            <button id="btn-tradier-smoke" class="btn btn-sm btn-secondary" onclick="runSmokeTest('tradier')">
+                Full Smoke Test
+            </button>
+        </div>
+        
+        <div id="results-tradier" class="mt-2 hidden"></div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Paper Mirror Status</h3>
+    <p class="text-muted mb-2">When enabled, paper trades are executed on both Alpaca and Tradier.</p>
+    
+    <div class="stat-box" style="max-width: 200px;">
+        <div class="stat-value" id="mirror-status">--</div>
+        <div class="stat-label">Paper Mirror</div>
+    </div>
+    
+    <p class="text-muted mt-2">Configure in <a href="/settings">Settings</a></p>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Environment Debug</h3>
+    <p class="text-muted mb-2">Check which environment variables are detected.</p>
+    
+    <button id="btn-debug-env" class="btn btn-sm btn-gray" onclick="checkEnvDebug()">
+        Check Environment
+    </button>
+    
+    <div id="env-results" class="mt-2 hidden"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadMirrorStatus() {
+    try {
+        const config = await fetchJSON('/config');
+        const enabled = config.paper_mirror_enabled;
+        document.getElementById('mirror-status').textContent = enabled ? 'ENABLED' : 'DISABLED';
+        document.getElementById('mirror-status').className = 'stat-value ' + (enabled ? 'result-ok' : 'result-warn');
+    } catch (error) {
+        console.error('Failed to load config:', error);
+    }
+}
+
+async function runHealthCheck(broker) {
+    const btn = document.getElementById(`btn-${broker}-health`);
+    const results = document.getElementById(`results-${broker}`);
+    
+    showSpinner(btn, 'Checking...');
+    show(results);
+    results.innerHTML = '<p class="text-muted">Running health check...</p>';
+    
+    try {
+        const data = await postJSON(`/health/${broker}`, {});
+        results.innerHTML = buildResultsTable(data.steps || []);
+        showSuccess(btn, 'Done!');
+    } catch (error) {
+        results.innerHTML = '<p class="result-fail">Health check failed</p>';
+        showError(btn, 'Error');
+    }
+}
+
+async function runSmokeTest(broker) {
+    const btn = document.getElementById(`btn-${broker}-smoke`);
+    const results = document.getElementById(`results-${broker}`);
+    
+    showSpinner(btn, 'Testing...');
+    show(results);
+    results.innerHTML = '<p class="text-muted">Running smoke test (may take 30+ seconds)...</p>';
+    
+    try {
+        const data = await postJSON(`/test/${broker}`, {});
+        results.innerHTML = buildResultsTable(data.steps || []);
+        
+        if (data.success) {
+            showSuccess(btn, 'Passed!');
+        } else {
+            showError(btn, 'Failed');
+        }
+    } catch (error) {
+        results.innerHTML = '<p class="result-fail">Smoke test failed</p>';
+        showError(btn, 'Error');
+    }
+}
+
+async function checkEnvDebug() {
+    const btn = document.getElementById('btn-debug-env');
+    const results = document.getElementById('env-results');
+    
+    showSpinner(btn, 'Checking...');
+    show(results);
+    
+    try {
+        const data = await fetchJSON('/debug/env');
+        
+        let html = '<table class="table"><thead><tr><th>Variable</th><th>Status</th></tr></thead><tbody>';
+        for (const [key, info] of Object.entries(data)) {
+            const statusClass = info.detected ? 'result-ok' : 'result-fail';
+            const statusText = info.detected ? 'Detected' : 'Missing';
+            html += `<tr><td>${escapeHtml(key)}</td><td class="${statusClass}">${statusText}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        
+        results.innerHTML = html;
+        showSuccess(btn, 'Done!');
+    } catch (error) {
+        results.innerHTML = '<p class="result-fail">Failed to check environment</p>';
+        showError(btn, 'Error');
+    }
+}
+
+loadMirrorStatus();
+</script>
+{% endblock %}

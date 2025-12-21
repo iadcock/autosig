@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Settings - Trading Bot{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3 class="card-title">Trading Settings</h3>
+    <p class="text-muted mb-3">Configure trading parameters. Changes are saved and persist across restarts.</p>
+    
+    <form id="settings-form">
+        <div class="grid-2">
+            <div class="form-group">
+                <label class="form-label">Paper Mirror Enabled</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="setting-paper-mirror" name="PAPER_MIRROR_ENABLED">
+                    <span class="toggle-slider"></span>
+                </label>
+                <p class="text-muted" style="font-size: 12px; margin-top: 4px;">Execute paper trades on both brokers</p>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Allow 0DTE SPX</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="setting-0dte" name="ALLOW_0DTE_SPX">
+                    <span class="toggle-slider"></span>
+                </label>
+                <p class="text-muted" style="font-size: 12px; margin-top: 4px;">Allow same-day expiration SPX trades</p>
+            </div>
+        </div>
+        
+        <div class="grid-2">
+            <div class="form-group">
+                <label class="form-label">Auto Poll Interval (seconds)</label>
+                <input type="number" id="setting-poll" name="AUTO_POLL_SECONDS" class="form-input" min="10" max="300">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Window Buffer (minutes)</label>
+                <input type="number" id="setting-buffer" name="AUTO_WINDOW_BUFFER_MINUTES" class="form-input" min="0" max="120">
+            </div>
+        </div>
+        
+        <div class="grid-3">
+            <div class="form-group">
+                <label class="form-label">Max Risk % Per Trade</label>
+                <input type="number" id="setting-risk-trade" name="MAX_RISK_PCT_PER_TRADE" class="form-input" min="1" max="10">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Max Daily Risk %</label>
+                <input type="number" id="setting-risk-daily" name="MAX_DAILY_RISK_PCT" class="form-input" min="1" max="50">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Max Open Positions</label>
+                <input type="number" id="setting-positions" name="MAX_OPEN_POSITIONS" class="form-input" min="1" max="100">
+            </div>
+        </div>
+        
+        <div class="grid-2">
+            <div class="form-group">
+                <label class="form-label">Max Trades Per Day</label>
+                <input type="number" id="setting-trades-day" name="AUTO_MAX_TRADES_PER_DAY" class="form-input" min="1" max="50">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Max Trades Per Hour</label>
+                <input type="number" id="setting-trades-hour" name="AUTO_MAX_TRADES_PER_HOUR" class="form-input" min="1" max="20">
+            </div>
+        </div>
+        
+        <div class="btn-row mt-3">
+            <button type="submit" id="btn-save" class="btn">Save Settings</button>
+            <button type="button" id="btn-reset" class="btn btn-gray" onclick="resetSettings()">Reset to Defaults</button>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Safety Status</h3>
+    <div class="grid-3">
+        <div class="stat-box">
+            <div class="stat-value" id="live-trading-status">--</div>
+            <div class="stat-label">Live Trading</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value" id="dry-run-status">--</div>
+            <div class="stat-label">Dry Run Mode</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-value" id="auto-mode-status">--</div>
+            <div class="stat-label">Auto Mode</div>
+        </div>
+    </div>
+    <p class="text-muted text-center mt-2">These settings are controlled by environment variables and cannot be changed here.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadSettings() {
+    try {
+        const settings = await fetchJSON('/api/settings');
+        
+        document.getElementById('setting-paper-mirror').checked = settings.PAPER_MIRROR_ENABLED || false;
+        document.getElementById('setting-0dte').checked = settings.ALLOW_0DTE_SPX || false;
+        document.getElementById('setting-poll').value = settings.AUTO_POLL_SECONDS || 30;
+        document.getElementById('setting-buffer').value = settings.AUTO_WINDOW_BUFFER_MINUTES || 60;
+        document.getElementById('setting-risk-trade').value = settings.MAX_RISK_PCT_PER_TRADE || 2;
+        document.getElementById('setting-risk-daily').value = settings.MAX_DAILY_RISK_PCT || 10;
+        document.getElementById('setting-positions').value = settings.MAX_OPEN_POSITIONS || 20;
+        document.getElementById('setting-trades-day').value = settings.AUTO_MAX_TRADES_PER_DAY || 10;
+        document.getElementById('setting-trades-hour').value = settings.AUTO_MAX_TRADES_PER_HOUR || 3;
+        
+    } catch (error) {
+        console.error('Failed to load settings:', error);
+    }
+    
+    try {
+        const config = await fetchJSON('/config');
+        
+        const liveEl = document.getElementById('live-trading-status');
+        liveEl.textContent = config.live_trading ? 'ENABLED' : 'DISABLED';
+        liveEl.className = 'stat-value ' + (config.live_trading ? 'result-fail' : 'result-ok');
+        
+        const autoEl = document.getElementById('auto-mode-status');
+        autoEl.textContent = config.auto_mode_enabled ? 'ENABLED' : 'DISABLED';
+        autoEl.className = 'stat-value ' + (config.auto_mode_enabled ? 'result-warn' : 'result-ok');
+        
+        document.getElementById('dry-run-status').textContent = 'CHECK ENV';
+        
+    } catch (error) {
+        console.error('Failed to load config:', error);
+    }
+}
+
+document.getElementById('settings-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const btn = document.getElementById('btn-save');
+    showSpinner(btn, 'Saving...');
+    
+    const settings = {
+        PAPER_MIRROR_ENABLED: document.getElementById('setting-paper-mirror').checked,
+        ALLOW_0DTE_SPX: document.getElementById('setting-0dte').checked,
+        AUTO_POLL_SECONDS: parseInt(document.getElementById('setting-poll').value) || 30,
+        AUTO_WINDOW_BUFFER_MINUTES: parseInt(document.getElementById('setting-buffer').value) || 60,
+        MAX_RISK_PCT_PER_TRADE: parseInt(document.getElementById('setting-risk-trade').value) || 2,
+        MAX_DAILY_RISK_PCT: parseInt(document.getElementById('setting-risk-daily').value) || 10,
+        MAX_OPEN_POSITIONS: parseInt(document.getElementById('setting-positions').value) || 20,
+        AUTO_MAX_TRADES_PER_DAY: parseInt(document.getElementById('setting-trades-day').value) || 10,
+        AUTO_MAX_TRADES_PER_HOUR: parseInt(document.getElementById('setting-trades-hour').value) || 3
+    };
+    
+    try {
+        const result = await postJSON('/api/settings', settings);
+        if (result.success) {
+            showSuccess(btn, 'Saved!');
+        } else {
+            showError(btn, 'Failed');
+        }
+    } catch (error) {
+        showError(btn, 'Error');
+    }
+});
+
+async function resetSettings() {
+    if (!confirm('Reset all settings to defaults?')) return;
+    
+    const btn = document.getElementById('btn-reset');
+    showSpinner(btn, 'Resetting...');
+    
+    try {
+        await postJSON('/api/settings/reset', {});
+        showSuccess(btn, 'Reset!');
+        loadSettings();
+    } catch (error) {
+        showError(btn, 'Error');
+    }
+}
+
+loadSettings();
+</script>
+{% endblock %}

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Logs - Trading Bot{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3 class="card-title">Execution History</h3>
+    
+    <div class="btn-row mb-3">
+        <button id="btn-refresh" class="btn btn-sm" onclick="loadLogs()">Refresh</button>
+        <select id="filter-type" class="form-input" style="width: auto; display: inline-block;" onchange="loadLogs()">
+            <option value="all">All Actions</option>
+            <option value="executed">Executed Only</option>
+            <option value="skipped">Skipped Only</option>
+        </select>
+        <a href="/backup" class="btn btn-sm btn-secondary">Download Backup ZIP</a>
+    </div>
+    
+    <div id="logs-container">
+        <p class="text-muted">Loading logs...</p>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">Report Generation</h3>
+    <div class="btn-row">
+        <a href="/report" class="btn btn-sm">Generate 24h Report</a>
+        <a href="/report?hours=48" class="btn btn-sm btn-gray">Generate 48h Report</a>
+        <a href="/report?hours=168" class="btn btn-sm btn-gray">Generate 7 Day Report</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadLogs() {
+    const container = document.getElementById('logs-container');
+    const filter = document.getElementById('filter-type').value;
+    
+    container.innerHTML = '<p class="text-muted">Loading...</p>';
+    
+    try {
+        const data = await fetchJSON('/api/logs?limit=50');
+        let logs = data.logs || [];
+        
+        if (filter === 'executed') {
+            logs = logs.filter(l => l.action === 'EXECUTE' || l.action === 'PAPER' || l.action === 'LIVE');
+        } else if (filter === 'skipped') {
+            logs = logs.filter(l => l.action === 'SKIP');
+        }
+        
+        if (logs.length === 0) {
+            container.innerHTML = '<p class="empty-state">No execution logs found</p>';
+            return;
+        }
+        
+        let html = `
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Action</th>
+                        <th>Ticker</th>
+                        <th>Reason/Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        for (const log of logs) {
+            const actionClass = log.action === 'SKIP' ? 'result-warn' : 
+                               (log.action === 'EXECUTE' || log.action === 'PAPER') ? 'result-ok' : '';
+            
+            html += `
+                <tr>
+                    <td>${formatTimestamp(log.timestamp)}</td>
+                    <td class="${actionClass}">${escapeHtml(log.action || '-')}</td>
+                    <td>${escapeHtml(log.ticker || log.underlying || '-')}</td>
+                    <td>${escapeHtml(truncate(log.reason || log.message || '-', 80))}</td>
+                </tr>
+            `;
+        }
+        
+        html += '</tbody></table>';
+        container.innerHTML = html;
+        
+    } catch (error) {
+        container.innerHTML = '<p class="result-fail">Failed to load logs</p>';
+    }
+}
+
+loadLogs();
+</script>
+{% endblock %}

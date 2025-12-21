@@ -1,0 +1,100 @@
+Refactor the UI to reduce clutter by introducing a tabbed navigation layout with separate pages:
+Dashboard, Review Queue, Brokers, Settings, Logs.
+
+Current issue:
+- Too many controls/buttons on the front page.
+Goal:
+- Make the app feel organized and production-like without React.
+- Use Flask templates (Jinja) + small vanilla JS for interactivity.
+
+REQUIREMENTS
+
+1) Create a base layout template:
+- templates/base.html
+Include:
+- Top nav bar with tabs:
+  Dashboard (/)
+  Review Queue (/review-ui)
+  Brokers (/brokers)
+  Settings (/settings)
+  Logs (/logs)
+- Simple clean styling (CSS) and consistent spacing.
+- Highlight active tab.
+
+2) Move content into separate pages:
+
+A) Dashboard (/)
+Keep only:
+- Market window status (within window / outside) and start/end times
+- Auto Mode status (enabled/disabled) + toggle button
+- Last action summary (executed/skip + reason)
+- Trades today/hour counters
+OPTIONAL: keep ONE small button group “Quick Checks” that links to Brokers page.
+Remove the large tables from here.
+
+B) Review Queue (/review-ui)
+Move the Review Queue table + approve/reject workflow here.
+Keep all existing functionality:
+- list signals
+- show detail panel
+- approve paper / approve live (live should remain gated)
+- reject with notes
+Use the existing JSON endpoints; the page can fetch and render.
+
+C) Brokers (/brokers)
+Move ALL broker-related utilities here:
+- Alpaca Health Check button + results table
+- Tradier Health Check button + results table
+- Paper Mirror status display (enabled/disabled)
+- Optional: a “Run PAPER execution test” section later (not required)
+Do NOT place trades from health checks.
+
+D) Settings (/settings)
+Create a settings UI with:
+- Toggle switches and inputs for:
+  PAPER_MIRROR_ENABLED (toggle)
+  AUTO_POLL_SECONDS (number)
+  AUTO_WINDOW_BUFFER_MINUTES (number)
+  MAX_RISK_PCT_PER_TRADE (number)
+  MAX_DAILY_RISK_PCT (number)
+  MAX_OPEN_POSITIONS (number)
+  ALLOW_0DTE_SPX (toggle)
+- A “Save Settings” button that POSTs to a settings endpoint.
+- A “Reset to Defaults” button.
+
+Back-end:
+- Create settings_store.py that persists settings to data/settings.json
+- Load settings on startup, fallback to env defaults if file missing.
+- Update existing logic to read from settings_store first, env second.
+
+Endpoints:
+- GET /api/settings -> returns current settings JSON
+- POST /api/settings -> updates settings and persists
+- POST /config/paper_mirror may remain but should be wired to settings page too
+(Ensure one source of truth: settings_store.)
+
+E) Logs (/logs)
+Create a simple log viewer:
+- Show last 50 lines from logs/execution_plan.jsonl (reverse chronological)
+- Add a “Download Backup ZIP” button (if already implemented, move it here)
+- Add filter dropdown: All / Executed / Skipped (optional if quick)
+
+3) Keep button animations:
+- For health check buttons and approve buttons: running spinner → success/fail
+- Use shared JS helper functions in static/app.js
+
+4) Code organization:
+- Add static/styles.css for consistent styling
+- Add static/app.js for shared fetch+render helpers
+- Ensure templates are clean and minimal.
+
+5) Do NOT break existing endpoints.
+- Keep current JSON endpoints used by auto mode/review queue/health checks.
+- Only move the UI around and add settings persistence.
+
+ACCEPTANCE
+- Home page is clean and not crowded.
+- Review queue has its own page and works.
+- Brokers page shows both health checks clearly.
+- Settings page saves toggles/values and affects app behavior.
+- Logs page shows execution history and backup download.
