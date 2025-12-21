@@ -8,9 +8,10 @@ import zipfile
 import io
 import logging
 from functools import wraps
-from flask import Flask, send_file, render_template_string, request, jsonify, session, redirect, url_for
+from flask import Flask, send_file, render_template_string, render_template, request, jsonify, session, redirect, url_for
 
 from app_config import config
+from settings_store import load_settings, save_settings, reset_to_defaults
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
 from env_loader import diagnose_env
@@ -18,7 +19,7 @@ from signal_to_intent import build_trade_intent, classify_signal_type, resolve_e
 from execution_plan import build_execution_plan, log_execution_plan, get_latest_signal_entry, get_executable_signal
 from execution.router import execute_trade
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates', static_folder='static')
 app.secret_key = config.SESSION_SECRET
 
 logging.basicConfig(
@@ -1223,17 +1224,10 @@ def logout():
 @login_required
 def index():
     """Dashboard home page."""
-    warning_banner = ""
-    warnings = config.get_warnings()
-    if warnings:
-        items = "".join(f"<li>{w}</li>" for w in warnings)
-        warning_banner = f'<div class="warning-banner"><strong>WARNING</strong><ul>{items}</ul></div>'
-    
-    top_bar = ""
-    if config.requires_auth():
-        top_bar = '<div class="top-bar"><a href="/logout" class="logout-btn">Logout</a></div>'
-    
-    return render_template_string(HTML_TEMPLATE, warning_banner=warning_banner, top_bar=top_bar)
+    return render_template('dashboard.html',
+                          active_tab='dashboard',
+                          warnings=config.get_warnings(),
+                          show_logout=config.requires_auth())
 
 
 @app.route("/health")
@@ -1799,6 +1793,95 @@ def get_version():
         "live_trading": config.LIVE_TRADING,
         "warnings": config.get_warnings()
     })
+
+
+# --- New Template-Based Page Routes ---
+
+@app.route("/review-ui")
+@login_required
+def review_ui():
+    """Review Queue page for signal approval workflow."""
+    return render_template('review.html',
+                          active_tab='review',
+                          warnings=config.get_warnings(),
+                          show_logout=config.requires_auth())
+
+
+@app.route("/brokers")
+@login_required
+def brokers_page():
+    """Brokers page with health checks."""
+    return render_template('brokers.html',
+                          active_tab='brokers',
+                          warnings=config.get_warnings(),
+                          show_logout=config.requires_auth())
+
+
+@app.route("/settings")
+@login_required
+def settings_page():
+    """Settings page with toggles and inputs."""
+    return render_template('settings.html',
+                          active_tab='settings',
+                          warnings=config.get_warnings(),
+                          show_logout=config.requires_auth())
+
+
+@app.route("/logs")
+@login_required
+def logs_page():
+    """Logs page with execution history viewer."""
+    return render_template('logs.html',
+                          active_tab='logs',
+                          warnings=config.get_warnings(),
+                          show_logout=config.requires_auth())
+
+
+# --- Settings API ---
+
+@app.route("/api/settings")
+@login_required
+def api_get_settings():
+    """Get current settings."""
+    return jsonify(load_settings())
+
+
+@app.route("/api/settings", methods=["POST"])
+@login_required
+def api_save_settings():
+    """Save settings."""
+    data = request.get_json() or {}
+    success = save_settings(data)
+    return jsonify({"success": success, "settings": load_settings()})
+
+
+@app.route("/api/settings/reset", methods=["POST"])
+@login_required
+def api_reset_settings():
+    """Reset settings to defaults."""
+    settings = reset_to_defaults()
+    return jsonify({"success": True, "settings": settings})
+
+
+# --- Logs API ---
+
+@app.route("/api/logs")
+@login_required
+def api_get_logs():
+    """Get execution logs."""
+    import json
+    limit = request.args.get('limit', 50, type=int)
+    logs = []
+    filepath = 'logs/execution_plan.jsonl'
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f:
+            for line in f:
+                try:
+                    logs.append(json.loads(line.strip()))
+                except:
+                    pass
+    logs.reverse()
+    return jsonify({"logs": logs[:limit]})
 
 
 if __name__ == "__main__":
