@@ -7,6 +7,16 @@
     <p class="text-muted mb-3">Configure trading parameters. Changes are saved and persist across restarts.</p>
     
     <form id="settings-form">
+        <div class="form-group">
+            <label class="form-label">Risk Mode</label>
+            <select id="setting-risk-mode" name="RISK_MODE" class="form-input">
+                <option value="conservative">Conservative - Spreads only, 1% max risk, 1 trade/hour</option>
+                <option value="balanced" selected>Balanced - Stocks + options, 2% max risk, 3 trades/hour</option>
+                <option value="aggressive">Aggressive - All trades allowed, 5% max risk, 5 trades/hour</option>
+            </select>
+            <p class="text-muted" style="font-size: 12px; margin-top: 4px;">Controls which trade types are allowed and enforces risk caps</p>
+        </div>
+        
         <div class="grid-2">
             <div class="form-group">
                 <label class="form-label">Paper Mirror Enabled</label>
@@ -23,7 +33,7 @@
                     <input type="checkbox" id="setting-0dte" name="ALLOW_0DTE_SPX">
                     <span class="toggle-slider"></span>
                 </label>
-                <p class="text-muted" style="font-size: 12px; margin-top: 4px;">Allow same-day expiration SPX trades</p>
+                <p class="text-muted" style="font-size: 12px; margin-top: 4px;">Allow same-day expiration SPX trades (Aggressive mode only)</p>
             </div>
         </div>
         
@@ -101,6 +111,7 @@ async function loadSettings() {
     try {
         const settings = await fetchJSON('/api/settings');
         
+        document.getElementById('setting-risk-mode').value = settings.RISK_MODE || 'balanced';
         document.getElementById('setting-paper-mirror').checked = settings.PAPER_MIRROR_ENABLED || false;
         document.getElementById('setting-0dte').checked = settings.ALLOW_0DTE_SPX || false;
         document.getElementById('setting-poll').value = settings.AUTO_POLL_SECONDS || 30;
@@ -140,6 +151,7 @@ document.getElementById('settings-form').addEventListener('submit', async functi
     showSpinner(btn, 'Saving...');
     
     const settings = {
+        RISK_MODE: document.getElementById('setting-risk-mode').value || 'balanced',
         PAPER_MIRROR_ENABLED: document.getElementById('setting-paper-mirror').checked,
         ALLOW_0DTE_SPX: document.getElementById('setting-0dte').checked,
         AUTO_POLL_SECONDS: parseInt(document.getElementById('setting-poll').value) || 30,

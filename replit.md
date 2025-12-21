@@ -18,7 +18,7 @@ The project features a Flask-based dashboard accessible via a web interface, run
 The bot is built around a modular architecture with distinct components for scraping, parsing, risk management, execution, and logging.
 - **Alert Scraping**: Uses Playwright with system Chromium to fetch JavaScript-rendered alerts from Whop.
 - **Signal Processing**: Employs regex-based parsing to convert raw alerts into `ParsedSignal` objects, followed by conversion to broker-agnostic `TradeIntent` objects.
-- **Risk Management**: Implements configurable risk limits (e.g., max contracts per trade, daily risk percentage) and pre-flight safety checks (completeness, supported assets, DTE guard, deduplication) before execution.
+- **Risk Management**: Implements configurable risk limits (e.g., max contracts per trade, daily risk percentage) and pre-flight safety checks (completeness, supported assets, DTE guard, deduplication) before execution. Features a **Risk Mode** system (CONSERVATIVE/BALANCED/AGGRESSIVE) that controls which trade types are allowed and enforces risk caps.
 - **Execution System**: Features a broker-agnostic `TradeIntent` and `ExecutionResult` model. It routes trades based on `execution_mode` (PAPER, LIVE, HISTORICAL) to dedicated executors (`PaperExecutor`, `TradierExecutor`, `HistoricalExecutor`).
 - **Position Tracking**: Maintains a JSONL-backed store for tracking paper trading positions, including opening and closing of trades.
 - **Idempotency**: Prevents duplicate executions of signals using a JSONL-backed deduplication store.
@@ -31,7 +31,7 @@ The bot is built around a modular architecture with distinct components for scra
 ### Feature Specifications
 - **Alert Parsing**: Supports various options strategies including debit/credit spreads and single-leg options, as well as stock and ETF trades.
 - **Trade Execution**: Capable of executing market and limit orders for stocks and options.
-- **Safety Features**: `DRY_RUN` mode (default), paper trading only (default), risk limits, duplicate alert detection, graceful error handling, and local alert file fallback.
+- **Safety Features**: `DRY_RUN` mode (default), paper trading only (default), risk limits, duplicate alert detection, graceful error handling, local alert file fallback, and **Risk Mode** toggle (Conservative: spreads only, 1% max risk; Balanced: stocks + options, 2% max risk; Aggressive: all trades, 5% max risk).
 - **Daily Summary**: Automatically generates a detailed daily trade summary using NYSE market calendar for accurate timing.
 - **Broker Smoke Tests**: Dashboard includes buttons to perform connectivity and basic order flow tests for integrated brokers.
 

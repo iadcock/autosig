@@ -21,7 +21,10 @@ DEFAULT_SETTINGS = {
     "ALLOW_0DTE_SPX": False,
     "AUTO_MAX_TRADES_PER_DAY": 10,
     "AUTO_MAX_TRADES_PER_HOUR": 3,
+    "RISK_MODE": "balanced",
 }
+
+VALID_RISK_MODES = ("conservative", "balanced", "aggressive")
 
 _settings_cache: Dict[str, Any] = {}
 
@@ -106,6 +109,12 @@ def save_settings(settings: Dict[str, Any]) -> bool:
                 try:
                     validated[key] = int(val)
                 except (ValueError, TypeError):
+                    validated[key] = default
+            elif key == "RISK_MODE":
+                val_str = str(val).lower()
+                if val_str in VALID_RISK_MODES:
+                    validated[key] = val_str
+                else:
                     validated[key] = default
             else:
                 validated[key] = val

@@ -9,12 +9,33 @@ import os
 from datetime import date, datetime
 from typing import Optional, Literal
 
-MAX_RISK_PCT_PER_TRADE = float(os.getenv("MAX_RISK_PCT_PER_TRADE", "0.02"))
-MAX_DAILY_RISK_PCT = float(os.getenv("MAX_DAILY_RISK_PCT", "0.05"))
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
-ALLOW_0DTE_SPX = os.getenv("ALLOW_0DTE_SPX", "false").lower() == "true"
+from settings_store import load_settings, VALID_RISK_MODES
+from strategy_rules import (
+    check_risk_mode_allows,
+    get_effective_caps,
+)
+
 ALLOW_NEXT_DAY_SPX = os.getenv("ALLOW_NEXT_DAY_SPX", "true").lower() == "true"
 LIVE_TRADING = os.getenv("LIVE_TRADING", "false").lower() == "true"
+
+
+def _get_current_settings():
+    """Get current settings with risk mode applied."""
+    settings = load_settings()
+    risk_mode = settings.get("RISK_MODE", "balanced")
+    if risk_mode not in VALID_RISK_MODES:
+        risk_mode = "balanced"
+    
+    effective_caps = get_effective_caps(risk_mode, settings)
+    
+    return {
+        "risk_mode": risk_mode,
+        "max_risk_pct": effective_caps.get("MAX_RISK_PCT_PER_TRADE", 2) / 100.0,
+        "max_trades_hour": effective_caps.get("AUTO_MAX_TRADES_PER_HOUR", 3),
+        "allow_0dte_spx": settings.get("ALLOW_0DTE_SPX", False),
+        "max_daily_risk_pct": settings.get("MAX_DAILY_RISK_PCT", 10) / 100.0,
+        "max_open_positions": settings.get("MAX_OPEN_POSITIONS", 20),
+    }
 
 
 def preflight_check(
@@ -44,10 +65,13 @@ def preflight_check(
     warnings = []
     blocked_reason = None
     
+    current_settings = _get_current_settings()
+    
     check_completeness(trade_intent, parsed_signal, checks)
     check_supported_assets(trade_intent, checks)
-    check_risk_controls(parsed_signal, trade_intent, checks, warnings)
-    check_dte_guard(trade_intent, checks)
+    check_risk_mode(parsed_signal, trade_intent, current_settings, checks)
+    check_risk_controls(parsed_signal, trade_intent, current_settings, checks, warnings)
+    check_dte_guard(trade_intent, current_settings, checks)
     check_mode_guard(execution_mode, checks)
     check_dedupe(post_id, checks)
     
@@ -202,35 +226,60 @@ def check_supported_assets(trade_intent: dict, checks: list) -> None:
     })
 
 
-def check_risk_controls(parsed_signal: dict, trade_intent: dict, checks: list, warnings: list) -> None:
+def check_risk_mode(parsed_signal: dict, trade_intent: dict, settings: dict, checks: list) -> None:
+    """Check if current risk mode allows this trade."""
+    risk_mode = settings.get("risk_mode", "balanced")
+    allow_0dte = settings.get("allow_0dte_spx", False)
+    
+    allowed, block_reason = check_risk_mode_allows(
+        parsed_signal, trade_intent, risk_mode, allow_0dte
+    )
+    
+    if not allowed:
+        checks.append({
+            "name": "risk_mode",
+            "ok": False,
+            "summary": block_reason
+        })
+    else:
+        checks.append({
+            "name": "risk_mode",
+            "ok": True,
+            "summary": f"Risk mode ({risk_mode.upper()}) allows this trade"
+        })
+
+
+def check_risk_controls(parsed_signal: dict, trade_intent: dict, settings: dict, checks: list, warnings: list) -> None:
     """Check risk controls and position limits."""
+    max_risk_pct = settings.get("max_risk_pct", 0.02)
     size_pct = parsed_signal.get("size_pct")
     
     if size_pct is None:
-        warnings.append(f"No size_pct in signal, will use max {MAX_RISK_PCT_PER_TRADE*100:.1f}%")
-        size_pct = MAX_RISK_PCT_PER_TRADE
+        warnings.append(f"No size_pct in signal, will use max {max_risk_pct*100:.1f}%")
+        size_pct = max_risk_pct
     else:
         size_pct = float(size_pct)
     
-    if size_pct > MAX_RISK_PCT_PER_TRADE:
+    if size_pct > max_risk_pct:
         checks.append({
             "name": "risk_per_trade",
             "ok": False,
-            "summary": f"Trade risk {size_pct*100:.1f}% exceeds max {MAX_RISK_PCT_PER_TRADE*100:.1f}%"
+            "summary": f"Trade risk {size_pct*100:.1f}% exceeds max {max_risk_pct*100:.1f}%"
         })
         return
     
     checks.append({
         "name": "risk_per_trade",
         "ok": True,
-        "summary": f"Trade risk {size_pct*100:.1f}% within limit ({MAX_RISK_PCT_PER_TRADE*100:.1f}% max)"
+        "summary": f"Trade risk {size_pct*100:.1f}% within limit ({max_risk_pct*100:.1f}% max)"
     })
 
 
-def check_dte_guard(trade_intent: dict, checks: list) -> None:
+def check_dte_guard(trade_intent: dict, settings: dict, checks: list) -> None:
     """Check DTE restrictions for SPX options."""
     underlying = trade_intent.get("underlying", "").upper()
     legs = trade_intent.get("legs", [])
+    allow_0dte_spx = settings.get("allow_0dte_spx", False)
     
     if underlying not in ("SPX", "SPXW"):
         checks.append({
@@ -269,7 +318,7 @@ def check_dte_guard(trade_intent: dict, checks: list) -> None:
             return
         
         if exp_date == today:
-            if not ALLOW_0DTE_SPX:
+            if not allow_0dte_spx:
                 checks.append({
                     "name": "dte_guard",
                     "ok": False,

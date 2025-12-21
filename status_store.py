@@ -116,12 +116,16 @@ def update_mode(requested: ModeType, effective: ModeType) -> bool:
 
 def get_all_statuses() -> Dict[str, Any]:
     """
-    Get all service statuses and mode.
+    Get all service statuses, mode, and risk mode.
     
     Returns:
-        Dict with whop, alpaca, tradier, mode status objects
+        Dict with whop, alpaca, tradier, mode, risk_mode status objects
     """
-    return _load_status_file()
+    from settings_store import get_setting
+    
+    data = _load_status_file()
+    data["risk_mode"] = get_setting("RISK_MODE", "balanced")
+    return data
 
 
 def get_service_status(service: str) -> Dict[str, Any]:

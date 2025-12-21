@@ -1,0 +1,132 @@
+Add a “Risk Mode” toggle that controls what strategies can execute:
+CONSERVATIVE / BALANCED / AGGRESSIVE.
+Example rule requested: long positions disabled in CONSERVATIVE mode.
+
+CONTEXT:
+- We already have EXECUTION_MODE (paper/live) with safe gating.
+- We already have preflight_check() that blocks unsafe actions.
+- We already have auto mode rate limits and settings persistence (settings_store).
+- We have parsed signals with fields like:
+  strategy, signal_type (ENTRY/EXIT), instrument_type, legs, underlying/ticker, size_pct, expiration, etc.
+
+GOALS:
+1) Add RISK_MODE setting persisted in data/settings.json
+2) Add UI toggle for RISK_MODE in Settings page + small indicator in Status Row
+3) Enforce RISK_MODE restrictions in preflight_check() (defense in depth)
+4) Ensure auto mode + manual approvals both respect RISK_MODE
+5) Provide clear block reasons in UI (e.g., “Blocked by CONSERVATIVE mode: long entries disabled”)
+
+────────────────────────────────────────
+A) Settings
+────────────────────────────────────────
+In settings_store.py add:
+- RISK_MODE = "balanced" default
+Valid values: "conservative" | "balanced" | "aggressive"
+
+Expose in:
+- GET /api/settings
+- POST /api/settings
+Also show in Status Row as:
+RISK: CONSERVATIVE/BALANCED/AGGRESSIVE
+
+────────────────────────────────────────
+B) Define strategy categories
+────────────────────────────────────────
+Create file: strategy_rules.py
+
+Implement helpers:
+- is_long_stock_entry(parsed_signal, trade_intent) -> bool
+- is_single_leg_option_entry(...) -> bool
+- is_spread_entry(...) -> bool
+- is_exit_signal(...) -> bool
+- is_spx_0dte(...) -> bool
+- get_trade_risk_bucket(...) -> "defined_risk"|"undefined_risk"
+
+Use trade_intent + parsed_signal to classify.
+
+Definitions:
+- long stock entry = instrument_type == "stock" AND action is open/buy AND signal_type == "ENTRY"
+- exit = signal_type == "EXIT" or action close
+- spx 0dte = underlying == "SPX" and expiration date == today (local ET date)
+
+────────────────────────────────────────
+C) Mode rules
+────────────────────────────────────────
+Implement per-mode rules in strategy_rules.py:
+
+CONSERVATIVE:
+- BLOCK long stock ENTRY (explicitly requested)
+- BLOCK undefined-risk options (single-leg long calls/puts) unless explicitly allowed by a flag
+- ALLOW defined-risk spreads (debit/credit spreads) if supported
+- ALLOW exits (always)
+- BLOCK SPX 0DTE
+- Set caps:
+  MAX_RISK_PCT_PER_TRADE = min(current_setting, 0.01)
+  AUTO_MAX_TRADES_PER_HOUR = min(current_setting, 1)
+
+BALANCED:
+- ALLOW long stock entry
+- ALLOW single-leg options entry if supported
+- ALLOW spreads if supported
+- ALLOW exits
+- BLOCK SPX 0DTE by default
+- Caps:
+  MAX_RISK_PCT_PER_TRADE = min(current_setting, 0.02)
+  AUTO_MAX_TRADES_PER_HOUR = min(current_setting, 3)
+
+AGGRESSIVE:
+- ALLOW long stock entry
+- ALLOW single-leg options entry if supported
+- ALLOW spreads if supported
+- ALLOW exits
+- Allow SPX 0DTE only if ALLOW_0DTE_SPX true
+- Caps:
+  MAX_RISK_PCT_PER_TRADE = min(current_setting, 0.05)
+  AUTO_MAX_TRADES_PER_HOUR = min(current_setting, 5)
+
+Important:
+- These caps should be applied dynamically in preflight.
+- Do not hardcode sizing; clamp existing settings to these mode maximums.
+
+────────────────────────────────────────
+D) Enforce in preflight_check()
+────────────────────────────────────────
+Modify preflight_check() to:
+1) Read RISK_MODE from settings_store
+2) Apply mode rules:
+- If trade is blocked by mode, set ok=false and blocked_reason with explicit wording:
+  “Blocked by CONSERVATIVE mode: long stock entries disabled”
+3) Clamp risk and rate-limit caps as described above
+4) Ensure checks list includes:
+- “Risk Mode Rules”
+- “Risk Cap”
+- “0DTE Guard”
+- “Trade Frequency Cap” (for auto)
+
+Preflight must block regardless of whether execution is manual or auto.
+
+────────────────────────────────────────
+E) UI/UX
+────────────────────────────────────────
+Settings page:
+- Add a dropdown or segmented control for RISK_MODE
+- Explain briefly what each mode allows/blocks (one line each)
+
+Status Row:
+- Add indicator: RISK: CONSERVATIVE/BALANCED/AGGRESSIVE
+- Color:
+  Conservative = green
+  Balanced = blue/grey
+  Aggressive = orange/red
+
+Review Queue:
+- For each row, show “Blocked by Mode” reason if applicable.
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+1) User can change RISK_MODE in Settings and it persists.
+2) CONSERVATIVE mode blocks long stock entries reliably (manual + auto).
+3) Preflight explains blocks clearly.
+4) Status Row shows current risk mode.
+5) No changes to parsing required.

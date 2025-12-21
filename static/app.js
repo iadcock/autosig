@@ -142,6 +142,7 @@ async function refreshStatusRow() {
         updateServiceStatus('alpaca', data.alpaca);
         updateServiceStatus('tradier', data.tradier);
         updateModeStatus(data.mode);
+        updateRiskStatus(data.risk_mode);
     } catch (e) {
         console.error('Failed to refresh status:', e);
     }
@@ -201,5 +202,25 @@ async function setExecutionMode(mode) {
     } catch (e) {
         console.error('Failed to set mode:', e);
         throw e;
+    }
+}
+
+function updateRiskStatus(riskMode) {
+    const badge = document.getElementById('riskBadge');
+    if (!badge) return;
+    
+    const mode = riskMode || 'balanced';
+    badge.textContent = mode.toUpperCase();
+    badge.className = 'risk-badge';
+    badge.classList.add('risk-' + mode);
+    
+    const el = document.getElementById('status-risk');
+    if (el) {
+        const descriptions = {
+            'conservative': 'Conservative: Spreads only, 1% max risk',
+            'balanced': 'Balanced: Stocks + options, 2% max risk',
+            'aggressive': 'Aggressive: All trades, 5% max risk'
+        };
+        el.title = descriptions[mode] || 'Risk Mode';
     }
 }
