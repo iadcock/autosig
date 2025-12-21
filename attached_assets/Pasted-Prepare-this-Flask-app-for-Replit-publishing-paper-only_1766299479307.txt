@@ -1,0 +1,58 @@
+Prepare this Flask app for Replit publishing (paper-only beta).
+
+Goals:
+- Deployable on Replit using a production web server (gunicorn)
+- Keep SAFE defaults: LIVE_TRADING must remain false unless explicitly enabled
+- Ensure the dashboard works in deployment
+- Add basic auth gate for beta so random users cannot access it
+- Improve JSONL persistence reliability (atomic writes + backups)
+
+Requirements:
+
+1) Production server:
+- Add gunicorn to requirements.txt
+- Create a Procfile OR Replit deployment config/start command using:
+  gunicorn -w 2 -k gthread -t 120 -b 0.0.0.0:$PORT app:app
+(Adjust workers if needed, but must bind to $PORT.)
+
+2) App config:
+- Create config.py that reads env vars with safe defaults:
+  LIVE_TRADING=false
+  AUTO_MODE_ENABLED=false
+  PAPER_MIRROR_ENABLED=false
+  APP_ENV=production|development
+  APP_PASSWORD (optional)
+- Ensure the app uses these defaults on boot.
+
+3) Basic auth for beta:
+- Add a simple password gate:
+  - If APP_PASSWORD is set, require it to access all routes except /health
+  - Implement with a login page + session cookie (Flask session)
+  - No password stored in code; only env var
+  - Add “Logout” button
+
+4) Logging:
+- Configure Python logging to stdout and to logs/app.log
+- Add request_id for each request and include it in logs
+- Log uncaught exceptions with stack traces
+
+5) JSONL reliability:
+- Ensure all writes to data/*.jsonl are atomic and safe:
+  - use a file lock (portalocker or fasteners) OR implement atomic append
+  - create data/ and logs/ if missing
+- Add a new endpoint/button: “Download Backup”
+  - bundles data/ and logs/ into a zip for download
+
+6) Deployment sanity checks:
+- Add GET /version returning git hash or static version
+- Add GET /health returning ok
+- Make sure the main dashboard loads in production
+
+7) Do NOT enable live trading or auto mode by default.
+- If any deployment env accidentally has LIVE_TRADING=true, show a big warning banner on the dashboard.
+
+Deliverables:
+- Updated requirements.txt
+- Any config files needed
+- Updated app.py wiring
+- Clear README section: “How to Deploy on Replit”
