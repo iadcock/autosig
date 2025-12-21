@@ -4,8 +4,13 @@ Provides a simple UI to generate reports and test broker connections.
 """
 
 import os
-from flask import Flask, send_file, render_template_string, request, jsonify
+import zipfile
+import io
+import logging
+from functools import wraps
+from flask import Flask, send_file, render_template_string, request, jsonify, session, redirect, url_for
 
+from app_config import config
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
 from env_loader import diagnose_env
@@ -14,6 +19,88 @@ from execution_plan import build_execution_plan, log_execution_plan, get_latest_
 from execution.router import execute_trade
 
 app = Flask(__name__)
+app.secret_key = config.SESSION_SECRET
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def login_required(f):
+    """Decorator to require authentication for protected routes."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if config.requires_auth() and not session.get('authenticated'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Trading Bot Dashboard</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .login-box {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        h1 { color: #1a1a2e; text-align: center; margin-bottom: 30px; }
+        .error { background: #ffe0e0; color: #c00; padding: 10px; border-radius: 8px; margin-bottom: 20px; text-align: center; }
+        input[type="password"] {
+            width: 100%;
+            padding: 14px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        input[type="password"]:focus { border-color: #667eea; outline: none; }
+        button {
+            width: 100%;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            color: white;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>Trading Bot Login</h1>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="POST">
+            <input type="password" name="password" placeholder="Enter password" required autofocus>
+            <button type="submit">Login</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -329,10 +416,46 @@ HTML_TEMPLATE = """
             padding: 30px;
             color: #666;
         }
+        .warning-banner {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(204, 0, 0, 0.3);
+        }
+        .warning-banner ul {
+            list-style: none;
+            margin: 10px 0 0 0;
+            padding: 0;
+        }
+        .warning-banner li {
+            padding: 5px 0;
+        }
+        .top-bar {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 15px;
+        }
+        .logout-btn {
+            background: #6c757d;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .logout-btn:hover {
+            background: #5a6268;
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        {{ top_bar | safe }}
+        {{ warning_banner | safe }}
         <h1>Trading Bot Dashboard</h1>
         <p class="subtitle">Victory Trades Alert Processing</p>
         
@@ -342,6 +465,10 @@ HTML_TEMPLATE = """
         
         <a href="/report?hours=48" class="btn btn-secondary btn-block">
             Generate Last 48 Hours Report
+        </a>
+        
+        <a href="/backup" class="btn btn-secondary btn-block">
+            Download Backup (data + logs)
         </a>
         
         <h2>Broker Smoke Tests</h2>
@@ -1061,19 +1188,62 @@ HTML_TEMPLATE = """
 """
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Login page for password-protected access."""
+    if not config.requires_auth():
+        return redirect(url_for('index'))
+    
+    if session.get('authenticated'):
+        return redirect(url_for('index'))
+    
+    error = None
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == config.APP_PASSWORD:
+            session['authenticated'] = True
+            logger.info("User authenticated successfully")
+            return redirect(url_for('index'))
+        else:
+            error = "Invalid password"
+            logger.warning("Failed login attempt")
+    
+    return render_template_string(LOGIN_TEMPLATE, error=error)
+
+
+@app.route("/logout")
+def logout():
+    """Log out and clear session."""
+    session.clear()
+    logger.info("User logged out")
+    return redirect(url_for('login'))
+
+
 @app.route("/")
+@login_required
 def index():
     """Dashboard home page."""
-    return render_template_string(HTML_TEMPLATE)
+    warning_banner = ""
+    warnings = config.get_warnings()
+    if warnings:
+        items = "".join(f"<li>{w}</li>" for w in warnings)
+        warning_banner = f'<div class="warning-banner"><strong>WARNING</strong><ul>{items}</ul></div>'
+    
+    top_bar = ""
+    if config.requires_auth():
+        top_bar = '<div class="top-bar"><a href="/logout" class="logout-btn">Logout</a></div>'
+    
+    return render_template_string(HTML_TEMPLATE, warning_banner=warning_banner, top_bar=top_bar)
 
 
 @app.route("/health")
 def health():
-    """Health check endpoint."""
+    """Health check endpoint (no auth required)."""
     return "ok"
 
 
 @app.route("/report")
+@login_required
 def download_report():
     """Generate and download the trading report."""
     hours = request.args.get("hours", 24, type=int)
@@ -1093,6 +1263,7 @@ def download_report():
 
 
 @app.route("/test/alpaca", methods=["POST"])
+@login_required
 def test_alpaca():
     """Run Alpaca smoke test and return JSON results."""
     result = alpaca_smoke_test()
@@ -1100,6 +1271,7 @@ def test_alpaca():
 
 
 @app.route("/test/tradier", methods=["POST"])
+@login_required
 def test_tradier():
     """Run Tradier smoke test and return JSON results."""
     result = tradier_smoke_test()
@@ -1107,6 +1279,7 @@ def test_tradier():
 
 
 @app.route("/debug/env")
+@login_required
 def debug_env():
     """
     Diagnostic endpoint to check environment variable visibility.
@@ -1125,6 +1298,7 @@ def debug_env():
 
 
 @app.route("/execute/paper/last_signal", methods=["POST"])
+@login_required
 def execute_paper_last_signal():
     """
     Execute the best executable signal in paper (simulated) mode.
@@ -1274,6 +1448,7 @@ def execute_paper_last_signal():
 
 
 @app.route("/review")
+@login_required
 def get_review_queue():
     """
     Get list of recent parsed signals for review.
@@ -1290,6 +1465,7 @@ def get_review_queue():
 
 
 @app.route("/review/approve", methods=["POST"])
+@login_required
 def approve_signal():
     """
     Approve and execute a signal in paper or live mode.
@@ -1469,6 +1645,7 @@ def approve_signal():
 
 
 @app.route("/review/reject", methods=["POST"])
+@login_required
 def reject_signal():
     """
     Reject a signal with notes.
@@ -1517,6 +1694,7 @@ def reject_signal():
 
 
 @app.route("/health/alpaca", methods=["POST"])
+@login_required
 def health_check_alpaca():
     """Run Alpaca health check (no trading)."""
     from broker_health_checks import alpaca_health_check
@@ -1525,6 +1703,7 @@ def health_check_alpaca():
 
 
 @app.route("/health/tradier", methods=["POST"])
+@login_required
 def health_check_tradier():
     """Run Tradier health check (no trading)."""
     from broker_health_checks import tradier_health_check
@@ -1533,6 +1712,7 @@ def health_check_tradier():
 
 
 @app.route("/config", methods=["GET"])
+@login_required
 def get_config():
     """Get current configuration (no secrets)."""
     from env_loader import load_env
@@ -1549,6 +1729,7 @@ def get_config():
 
 
 @app.route("/config/paper_mirror", methods=["POST"])
+@login_required
 def set_paper_mirror():
     """Toggle paper mirror setting (runtime only)."""
     data = request.get_json() or {}
@@ -1561,6 +1742,7 @@ def set_paper_mirror():
 
 
 @app.route("/auto/status", methods=["GET"])
+@login_required
 def get_auto_status():
     """Get auto mode status."""
     from auto_mode import get_auto_status
@@ -1568,6 +1750,7 @@ def get_auto_status():
 
 
 @app.route("/auto/toggle", methods=["POST"])
+@login_required
 def toggle_auto_mode():
     """Toggle auto mode on/off."""
     from auto_mode import set_auto_enabled
@@ -1575,6 +1758,47 @@ def toggle_auto_mode():
     enabled = data.get("enabled", False)
     status = set_auto_enabled(enabled)
     return jsonify(status)
+
+
+@app.route("/backup")
+@login_required
+def download_backup():
+    """Download a zip of data/ and logs/ directories."""
+    memory_file = io.BytesIO()
+    
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for folder in ['data', 'logs']:
+            if os.path.exists(folder):
+                for root, dirs, files in os.walk(folder):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = file_path
+                        try:
+                            zf.write(file_path, arcname)
+                        except Exception:
+                            pass
+    
+    memory_file.seek(0)
+    from datetime import datetime
+    filename = f"trading_bot_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.zip"
+    
+    return send_file(
+        memory_file,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=filename
+    )
+
+
+@app.route("/version")
+def get_version():
+    """Get version and config info (public endpoint)."""
+    return jsonify({
+        "version": "1.0.0",
+        "name": "Trading Bot Dashboard",
+        "live_trading": config.LIVE_TRADING,
+        "warnings": config.get_warnings()
+    })
 
 
 if __name__ == "__main__":

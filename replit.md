@@ -287,3 +287,43 @@ Debug endpoint: GET /debug/env - Shows which env vars are detected (no values ex
 - Table of all trading signals parsed
 - Execution plans with contract details
 - Non-signal alerts with classification reasons
+
+## Deployment (Publishing)
+
+The dashboard is ready for Replit publishing as a paper-trading beta.
+
+### Deployment Configuration
+- **Target**: Autoscale deployment
+- **Command**: `gunicorn --bind=0.0.0.0:5000 --workers=2 --threads=2 --timeout=120 dashboard:app`
+- **Port**: 5000
+
+### Required Secrets for Production
+Set these in the Replit Secrets tab before publishing:
+- `SESSION_SECRET`: Random string for Flask sessions (auto-generated if not set)
+- `APP_PASSWORD`: Optional - set to enable password protection for dashboard
+- `TRADIER_TOKEN`: Tradier API token (sandbox or live)
+- `TRADIER_ACCOUNT_ID`: Tradier account ID
+
+### Safety Defaults
+All trading features default to SAFE/OFF:
+- `LIVE_TRADING=false` - No real money trades
+- `AUTO_MODE_ENABLED=false` - No automatic execution
+- `DRY_RUN=true` - Log only, no orders
+- `PAPER_MIRROR_ENABLED=false` - Single broker paper trades
+
+### Dashboard Features
+- `/` - Main dashboard with reports, smoke tests, health checks
+- `/health` - Health check endpoint (no auth required)
+- `/version` - Version and config info (public)
+- `/backup` - Download zip of data/ and logs/ directories
+- `/login`, `/logout` - Authentication (if APP_PASSWORD is set)
+
+### Warning Banner
+If `LIVE_TRADING=true`, a red warning banner appears at the top of the dashboard alerting users that real money is at risk.
+
+### Centralized Config
+Configuration is managed via `app_config.py` with:
+- Safe defaults for all trading settings
+- `config.get_warnings()` returns list of unsafe config warnings
+- `config.to_dict()` for safe display (no secrets exposed)
+- `config.requires_auth()` checks if APP_PASSWORD is set
