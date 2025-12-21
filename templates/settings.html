@@ -8,6 +8,17 @@
     
     <form id="settings-form">
         <div class="form-group">
+            <label class="form-label">Execution Mode</label>
+            <select id="setting-execution-mode" name="REQUESTED_EXECUTION_MODE" class="form-input">
+                <option value="paper">Paper - Simulated trading only (safe)</option>
+                <option value="live">Live - Real money trading (requires LIVE_TRADING=true)</option>
+                <option value="dual">Dual - Live trading + paper mirror (requires ALLOW_DUAL_MODE=true)</option>
+            </select>
+            <p class="text-muted" style="font-size: 12px; margin-top: 4px;">Paper is always safe. Live and Dual require environment flags to be enabled.</p>
+            <p id="mode-effective-msg" class="text-muted" style="font-size: 12px; margin-top: 4px; font-style: italic;"></p>
+        </div>
+        
+        <div class="form-group">
             <label class="form-label">Risk Mode</label>
             <select id="setting-risk-mode" name="RISK_MODE" class="form-input">
                 <option value="conservative">Conservative - Spreads only, 1% max risk, 1 trade/hour</option>
@@ -111,6 +122,7 @@ async function loadSettings() {
     try {
         const settings = await fetchJSON('/api/settings');
         
+        document.getElementById('setting-execution-mode').value = settings.REQUESTED_EXECUTION_MODE || 'paper';
         document.getElementById('setting-risk-mode').value = settings.RISK_MODE || 'balanced';
         document.getElementById('setting-paper-mirror').checked = settings.PAPER_MIRROR_ENABLED || false;
         document.getElementById('setting-0dte').checked = settings.ALLOW_0DTE_SPX || false;
@@ -124,6 +136,21 @@ async function loadSettings() {
         
     } catch (error) {
         console.error('Failed to load settings:', error);
+    }
+    
+    try {
+        const modeInfo = await fetchJSON('/mode');
+        const msgEl = document.getElementById('mode-effective-msg');
+        if (msgEl && modeInfo) {
+            msgEl.textContent = modeInfo.message || '';
+            if (modeInfo.effective !== modeInfo.requested) {
+                msgEl.style.color = '#dc3545';
+            } else {
+                msgEl.style.color = '#28a745';
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load mode info:', error);
     }
     
     try {
@@ -151,6 +178,7 @@ document.getElementById('settings-form').addEventListener('submit', async functi
     showSpinner(btn, 'Saving...');
     
     const settings = {
+        REQUESTED_EXECUTION_MODE: document.getElementById('setting-execution-mode').value || 'paper',
         RISK_MODE: document.getElementById('setting-risk-mode').value || 'balanced',
         PAPER_MIRROR_ENABLED: document.getElementById('setting-paper-mirror').checked,
         ALLOW_0DTE_SPX: document.getElementById('setting-0dte').checked,
@@ -162,6 +190,14 @@ document.getElementById('settings-form').addEventListener('submit', async functi
         AUTO_MAX_TRADES_PER_DAY: parseInt(document.getElementById('setting-trades-day').value) || 10,
         AUTO_MAX_TRADES_PER_HOUR: parseInt(document.getElementById('setting-trades-hour').value) || 3
     };
+    
+    const execMode = document.getElementById('setting-execution-mode').value;
+    if (execMode === 'live' || execMode === 'dual') {
+        if (!confirm('WARNING: You are enabling ' + execMode.toUpperCase() + ' mode. This will execute trades with REAL MONEY. Continue?')) {
+            showError(btn, 'Cancelled');
+            return;
+        }
+    }
     
     try {
         const result = await postJSON('/api/settings', settings);

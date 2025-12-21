@@ -182,8 +182,20 @@ function updateModeStatus(mode) {
     
     if (effective === 'live') {
         badge.classList.add('mode-live');
+    } else if (effective === 'dual') {
+        badge.classList.add('mode-dual');
     } else {
         badge.classList.add('mode-paper');
+    }
+    
+    const statusEl = document.getElementById('status-mode');
+    if (statusEl) {
+        const tooltips = {
+            'paper': 'Paper trading only - no real money at risk',
+            'live': 'LIVE TRADING - Real money at risk!',
+            'dual': 'DUAL MODE - Live trading + paper mirror'
+        };
+        statusEl.title = tooltips[effective] || 'Execution Mode';
     }
 }
 
@@ -202,6 +214,16 @@ async function setExecutionMode(mode) {
     } catch (e) {
         console.error('Failed to set mode:', e);
         throw e;
+    }
+}
+
+async function getExecutionMode() {
+    try {
+        const resp = await fetch('/mode');
+        return await resp.json();
+    } catch (e) {
+        console.error('Failed to get mode:', e);
+        return null;
     }
 }
 

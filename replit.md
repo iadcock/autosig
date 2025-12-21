@@ -20,6 +20,11 @@ The bot is built around a modular architecture with distinct components for scra
 - **Signal Processing**: Employs regex-based parsing to convert raw alerts into `ParsedSignal` objects, followed by conversion to broker-agnostic `TradeIntent` objects.
 - **Risk Management**: Implements configurable risk limits (e.g., max contracts per trade, daily risk percentage) and pre-flight safety checks (completeness, supported assets, DTE guard, deduplication) before execution. Features a **Risk Mode** system (CONSERVATIVE/BALANCED/AGGRESSIVE) that controls which trade types are allowed and enforces risk caps.
 - **Execution System**: Features a broker-agnostic `TradeIntent` and `ExecutionResult` model. It routes trades based on `execution_mode` (PAPER, LIVE, HISTORICAL) to dedicated executors (`PaperExecutor`, `TradierExecutor`, `HistoricalExecutor`).
+- **3-State Execution Mode**: Centralized mode management via `mode_manager.py` with three modes:
+  - **Paper**: Safe simulated trading (default, always allowed)
+  - **Live**: Real money trading (requires `LIVE_TRADING=true`, `DRY_RUN=false`)
+  - **Dual**: Live trading + paper mirror for verification (requires `ALLOW_DUAL_MODE=true`)
+  - Safety gates automatically fall back to paper mode if environment flags aren't properly set.
 - **Position Tracking**: Maintains a JSONL-backed store for tracking paper trading positions, including opening and closing of trades.
 - **Idempotency**: Prevents duplicate executions of signals using a JSONL-backed deduplication store.
 - **Review Queue**: Allows manual review and approval/rejection of signals before execution.
@@ -31,7 +36,7 @@ The bot is built around a modular architecture with distinct components for scra
 ### Feature Specifications
 - **Alert Parsing**: Supports various options strategies including debit/credit spreads and single-leg options, as well as stock and ETF trades.
 - **Trade Execution**: Capable of executing market and limit orders for stocks and options.
-- **Safety Features**: `DRY_RUN` mode (default), paper trading only (default), risk limits, duplicate alert detection, graceful error handling, local alert file fallback, and **Risk Mode** toggle (Conservative: spreads only, 1% max risk; Balanced: stocks + options, 2% max risk; Aggressive: all trades, 5% max risk).
+- **Safety Features**: `DRY_RUN` mode (default), paper trading only (default), risk limits, duplicate alert detection, graceful error handling, local alert file fallback, **Risk Mode** toggle (Conservative: spreads only, 1% max risk; Balanced: stocks + options, 2% max risk; Aggressive: all trades, 5% max risk), and **Execution Mode** selector (Paper/Live/Dual) with safety gates.
 - **Daily Summary**: Automatically generates a detailed daily trade summary using NYSE market calendar for accurate timing.
 - **Broker Smoke Tests**: Dashboard includes buttons to perform connectivity and basic order flow tests for integrated brokers.
 
@@ -41,6 +46,13 @@ The bot is built around a modular architecture with distinct components for scra
 - **Environment-based Configuration**: All sensitive information and configurable parameters are managed through environment variables, promoting secure deployment.
 - **Playwright for Scraping**: Chosen for its ability to handle modern, JavaScript-rendered web pages, ensuring reliable alert fetching.
 - **JSONL for Data Storage**: Used for persistent storage of paper positions, deduplication records, and execution plans due to its append-only nature and ease of parsing.
+
+### Environment Variables for Execution Mode
+- `LIVE_TRADING`: Set to `true` to allow live trading mode (default: `false`)
+- `DRY_RUN`: Set to `false` to allow actual order execution (default: `true`)
+- `ALLOW_DUAL_MODE`: Set to `true` to allow dual mode - live + paper mirror (default: `false`)
+- `AUTO_LIVE_ENABLED`: Set to `true` to allow auto mode to execute live trades (default: `false`)
+- `PRIMARY_LIVE_BROKER`: Primary broker for live trades (default: `tradier`)
 
 ## External Dependencies
 - **Whop**: Source for trade alerts (requires `WHOP_ALERTS_URL`, `WHOP_ACCESS_TOKEN`, `WHOP_REFRESH_TOKEN`, `WHOP_UID_TOKEN`, `WHOP_USER_ID`, `WHOP_SSK`, `WHOP_CSRF` cookies for scraping).

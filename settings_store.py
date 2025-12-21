@@ -22,9 +22,11 @@ DEFAULT_SETTINGS = {
     "AUTO_MAX_TRADES_PER_DAY": 10,
     "AUTO_MAX_TRADES_PER_HOUR": 3,
     "RISK_MODE": "balanced",
+    "REQUESTED_EXECUTION_MODE": "paper",
 }
 
 VALID_RISK_MODES = ("conservative", "balanced", "aggressive")
+VALID_EXECUTION_MODES = ("paper", "live", "dual")
 
 _settings_cache: Dict[str, Any] = {}
 
@@ -113,6 +115,12 @@ def save_settings(settings: Dict[str, Any]) -> bool:
             elif key == "RISK_MODE":
                 val_str = str(val).lower()
                 if val_str in VALID_RISK_MODES:
+                    validated[key] = val_str
+                else:
+                    validated[key] = default
+            elif key == "REQUESTED_EXECUTION_MODE":
+                val_str = str(val).lower()
+                if val_str in VALID_EXECUTION_MODES:
                     validated[key] = val_str
                 else:
                     validated[key] = default

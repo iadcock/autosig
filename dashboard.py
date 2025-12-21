@@ -1933,30 +1933,34 @@ def health_tradier():
 @app.route("/mode/set", methods=["POST"])
 @login_required
 def set_mode():
-    """Set execution mode (paper/live)."""
+    """Set execution mode (paper/live/dual)."""
+    from mode_manager import set_requested_mode, VALID_MODES
+    
     data = request.get_json() or {}
     requested = data.get("mode", "paper").lower()
     
-    if requested not in ("paper", "live"):
-        return jsonify({"error": "Invalid mode. Use 'paper' or 'live'"}), 400
+    if requested not in VALID_MODES:
+        return jsonify({"error": "Invalid mode. Use 'paper', 'live', or 'dual'"}), 400
     
-    if requested == "live" and not config.LIVE_TRADING:
-        effective = "paper"
-        message = "Live trading is disabled. LIVE_TRADING env var must be true."
-    else:
-        effective = requested
-        message = f"Mode set to {effective}"
+    mode_info = set_requested_mode(requested)
     
-    update_mode(requested, effective)
+    update_mode(requested, mode_info["effective"])
     
     return jsonify({
         "success": True,
-        "message": message,
-        "mode": {
-            "requested": requested,
-            "effective": effective
-        }
+        "message": mode_info["message"],
+        "mode": mode_info
     })
+
+
+@app.route("/mode", methods=["GET"])
+@login_required
+def get_mode():
+    """Get current execution mode info."""
+    from mode_manager import get_effective_execution_mode
+    
+    mode_info = get_effective_execution_mode()
+    return jsonify(mode_info)
 
 
 if __name__ == "__main__":

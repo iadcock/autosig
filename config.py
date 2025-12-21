@@ -29,6 +29,12 @@ LIVE_TRADING: bool = os.getenv("LIVE_TRADING", "false").lower() == "true"
 
 DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"
 
+ALLOW_DUAL_MODE: bool = os.getenv("ALLOW_DUAL_MODE", "false").lower() == "true"
+
+AUTO_LIVE_ENABLED: bool = os.getenv("AUTO_LIVE_ENABLED", "false").lower() == "true"
+
+PRIMARY_LIVE_BROKER: str = os.getenv("PRIMARY_LIVE_BROKER", "tradier").lower()
+
 ALPACA_API_KEY: Optional[str] = os.getenv("ALPACA_API_KEY")
 ALPACA_API_SECRET: Optional[str] = os.getenv("ALPACA_API_SECRET")
 ALPACA_PAPER_BASE_URL: str = os.getenv(

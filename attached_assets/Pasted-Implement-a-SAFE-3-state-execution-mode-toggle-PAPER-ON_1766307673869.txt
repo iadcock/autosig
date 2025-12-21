@@ -1,0 +1,175 @@
+Implement a SAFE 3-state execution mode toggle:
+PAPER ONLY / LIVE ONLY / PAPER+LIVE (dual),
+with strict server-side gating so real-money trades can never happen by accident.
+
+CONTEXT:
+- App has preflight + dedupe + review queue + auto mode + broker executors.
+- There is already an execution mode setting (paper/live) OR we are adding it.
+- There is a Status Row.
+- Live trading is currently controlled by env vars LIVE_TRADING and DRY_RUN.
+
+GOALS:
+1) Add a 3-state Requested Mode the user can toggle in the UI:
+   - "paper"
+   - "live"
+   - "dual" (paper+live)
+2) Add server-side capability flags (env) that determine what is actually allowed:
+   - LIVE_TRADING (default false)
+   - ALLOW_DUAL_MODE (default false)
+   - AUTO_LIVE_ENABLED (default false)
+3) Compute an Effective Mode at runtime:
+   - If requested mode is not allowed, automatically fall back to "paper"
+4) Ensure:
+   - AUTO MODE remains PAPER ONLY always (unless AUTO_LIVE_ENABLED is explicitly true in the future)
+   - LIVE trades are never mirrored to a second live broker
+   - DUAL mode means: execute LIVE on primary broker, and PAPER mirror (if enabled) for verification only
+5) Update Status Row to show both Requested and Effective mode + warning styling for live.
+
+────────────────────────────────────────
+A) Settings storage
+────────────────────────────────────────
+In settings_store.py (or create it), persist:
+- REQUESTED_EXECUTION_MODE: "paper"|"live"|"dual"  (default "paper")
+
+Expose:
+- GET /api/settings includes requested mode
+- POST /api/settings updates requested mode
+
+Add helper:
+get_requested_execution_mode() -> str
+
+────────────────────────────────────────
+B) Environment capability flags (server-side truth)
+────────────────────────────────────────
+Read env vars with safe defaults:
+- LIVE_TRADING=false
+- ALLOW_DUAL_MODE=false
+- AUTO_LIVE_ENABLED=false
+- PRIMARY_LIVE_BROKER=tradier
+
+Implement helper:
+is_live_allowed() -> bool  (LIVE_TRADING == "true" AND DRY_RUN != "true")
+is_dual_allowed() -> bool  (is_live_allowed() AND ALLOW_DUAL_MODE == "true")
+
+NOTE:
+- If DRY_RUN is true, live is not allowed.
+- If LIVE_TRADING true and DRY_RUN false, show a prominent warning banner (existing).
+
+────────────────────────────────────────
+C) Effective mode computation (critical)
+────────────────────────────────────────
+Add to settings_store.py (or new file mode_manager.py):
+
+get_effective_execution_mode() -> dict:
+Return:
+{
+  "requested": "...",
+  "effective": "...",   # paper|live|dual
+  "live_allowed": bool,
+  "dual_allowed": bool,
+  "message": str
+}
+
+Logic:
+- If requested == "paper" => effective="paper"
+- If requested == "live":
+   if live_allowed => effective="live"
+   else effective="paper" with message "Live blocked by server config"
+- If requested == "dual":
+   if dual_allowed => effective="dual"
+   else effective="paper" with message "Dual blocked by server config"
+
+This helper must be used everywhere orders can execute.
+
+────────────────────────────────────────
+D) Endpoints
+────────────────────────────────────────
+Add endpoint:
+POST /mode/set { "mode": "paper"|"live"|"dual" }
+
+It updates REQUESTED_EXECUTION_MODE and returns:
+{
+  requested_mode,
+  effective_mode,
+  live_allowed,
+  dual_allowed,
+  message
+}
+
+Add endpoint:
+GET /mode -> returns same payload
+
+────────────────────────────────────────
+E) Enforce mode in ALL execution entrypoints
+────────────────────────────────────────
+Wherever execution happens (manual approve endpoints and auto mode):
+- replace any hardcoded execution_mode with:
+  mode_info = get_effective_execution_mode()
+  effective_mode = mode_info["effective"]
+
+MANUAL APPROVE:
+- If effective_mode == "paper":
+   execute paper (and paper mirroring if PAPER_MIRROR_ENABLED)
+- If effective_mode == "live":
+   execute LIVE on PRIMARY_LIVE_BROKER ONLY (no mirroring to live)
+- If effective_mode == "dual":
+   1) execute LIVE on PRIMARY_LIVE_BROKER
+   2) execute PAPER mirror(s) (Tradier sandbox + Alpaca paper when supported)
+   NOTE: paper mirror should never block the live order; log mirror failures separately.
+
+AUTO MODE:
+- Must remain PAPER ONLY regardless of requested mode.
+- Add check:
+   if AUTO_LIVE_ENABLED != "true": auto_effective_mode="paper"
+- Display this clearly in UI.
+
+Preflight defense-in-depth:
+- preflight_check must block any live/dual execution if live_allowed is false.
+- Live/dual must also enforce dedupe, risk caps, and other safety checks.
+
+────────────────────────────────────────
+F) UI changes
+────────────────────────────────────────
+Settings page:
+- Add a 3-option segmented control or dropdown:
+   PAPER ONLY
+   LIVE ONLY
+   PAPER + LIVE (Dual)
+- On change, POST /mode/set and show toast message with returned "message".
+- If user selects live/dual but effective falls back to paper, show warning banner:
+   "Requested LIVE, but server blocked it. Effective mode: PAPER."
+
+Status Row:
+- Show:
+   MODE: <EFFECTIVE> (e.g., PAPER / LIVE / DUAL)
+   Requested: <REQUESTED> if different
+- Color:
+   PAPER = grey/blue
+   LIVE = red
+   DUAL = red/orange with warning icon
+- If LIVE_TRADING true and DRY_RUN false, show global warning banner:
+   "LIVE TRADING ENABLED - Real money at risk!"
+
+Add a small link from the MODE badge to /settings.
+
+────────────────────────────────────────
+G) Logging
+────────────────────────────────────────
+Whenever an execution is attempted, log:
+- requested_mode
+- effective_mode
+- primary broker result
+- mirror results (if dual)
+- any fallbacks applied
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+1) User can toggle between paper/live/dual in Settings.
+2) Effective mode is computed safely:
+   - falls back to paper unless env flags allow live/dual.
+3) Manual approvals execute according to effective mode.
+4) Auto mode stays paper-only unless AUTO_LIVE_ENABLED=true (do not enable now).
+5) LIVE is never mirrored to a second live broker.
+6) Status Row shows mode clearly and warns when live is enabled.
+7) No secrets are exposed.

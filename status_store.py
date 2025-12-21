@@ -11,7 +11,7 @@ from typing import Dict, Any, Literal
 STATUS_FILE = "data/status.json"
 
 ServiceStatus = Literal["ok", "fail", "warn", "unknown"]
-ModeType = Literal["paper", "live"]
+ModeType = Literal["paper", "live", "dual"]
 
 DEFAULT_STATUS: Dict[str, Any] = {
     "whop": {
