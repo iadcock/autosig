@@ -1,0 +1,101 @@
+Change LIVE trading warnings UX:
+- Remove the global red banner.
+- Show a popup modal warning ONLY when a user selects LIVE or DUAL (Paper+Live).
+- Add a subtle "LIVE ARMED" badge in the Status Row when env is hot.
+
+CONTEXT:
+- We have requested vs effective execution mode logic.
+- Env vars:
+  LIVE_TRADING (true/false)
+  DRY_RUN (true/false)
+  ALLOW_DUAL_MODE (true/false)
+- Settings page has Execution Mode dropdown with Paper / Live / Dual.
+- Status Row exists.
+
+GOALS:
+1) No global red banner unless user is actively attempting to enable LIVE/DUAL
+2) Popup confirmation for LIVE/DUAL selection
+3) Still show a small always-visible "LIVE ARMED" badge when env is configured to allow real trades
+
+────────────────────────────────────────
+A) Remove global banner
+────────────────────────────────────────
+- Locate the code that renders the red warning banner (likely in base.html).
+- Remove it entirely OR gate it behind:
+  show_banner = false
+We no longer want a page-wide banner.
+
+────────────────────────────────────────
+B) Add "LIVE ARMED" badge in Status Row (subtle)
+────────────────────────────────────────
+In base.html status row:
+- If LIVE_TRADING == true AND DRY_RUN == false:
+    show a small red badge: "LIVE ARMED"
+  Else:
+    show nothing
+
+Tooltip text:
+"Server env allows real orders. Live trades still require selecting LIVE/DUAL and confirming."
+
+This is NOT a banner; keep it compact.
+
+────────────────────────────────────────
+C) Modal popup on selecting LIVE or DUAL
+────────────────────────────────────────
+On Settings page, when user changes Execution Mode to "live" or "dual":
+- Do NOT immediately POST /mode/set
+- Instead show a modal popup.
+
+Modal content must include:
+Title: "Enable Live Trading?"
+Body:
+- "LIVE trading can place real orders and use real money."
+- Show env status:
+   LIVE_TRADING: true/false
+   DRY_RUN: true/false
+   DUAL allowed: true/false
+- Show the effective outcome:
+   - If env blocks live: "Effective mode will remain PAPER."
+   - If env allows live: "Effective mode will become LIVE/DUAL after confirmation."
+
+Confirmation:
+- If selecting "live": require typing "ENABLE LIVE" into an input box
+- If selecting "dual": require typing "ENABLE DUAL"
+- Confirm button stays disabled until text matches exactly
+Buttons:
+- Confirm
+- Cancel (revert dropdown to previous selection)
+
+After confirm:
+- Call POST /mode/set with the selected mode
+- Display returned message/warnings in the UI
+- Update Status Row mode immediately
+
+If env blocks live/dual:
+- Still show modal, but the Confirm button should either:
+   a) be disabled with text: "Blocked by server config"
+   OR
+   b) allow confirm but POST returns effective_mode=paper and show warning banner inline
+Either is acceptable, but must be clear.
+
+────────────────────────────────────────
+D) Never show the modal for PAPER
+────────────────────────────────────────
+If selecting Paper:
+- Apply immediately (POST /mode/set) without modal.
+
+────────────────────────────────────────
+E) Keep defense in depth
+────────────────────────────────────────
+- Even after UI confirmation, server must still compute effective mode safely.
+- preflight_check must still block live if env is not allowed.
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+1) Global red banner is gone.
+2) Selecting LIVE or DUAL triggers a modal warning and requires typed confirmation.
+3) Cancel reverts the dropdown.
+4) If env is hot (LIVE_TRADING=true and DRY_RUN=false), Status Row shows small "LIVE ARMED" badge.
+5) If env is not hot, no badge and live remains blocked.
+6) Server-side effective mode logic still enforces safety.

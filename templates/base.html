@@ -20,6 +20,9 @@
             <span class="status-dot status-unknown"></span>
             <span class="status-label">TRADIER</span>
         </a>
+        <span class="status-item live-armed-item" id="status-live-armed" style="display: none;" title="Server env allows real orders. Live trades still require selecting LIVE/DUAL and confirming.">
+            <span class="live-armed-badge">LIVE ARMED</span>
+        </span>
         <a href="/settings" class="status-item mode-item" id="status-mode" title="Execution Mode">
             <span class="mode-badge mode-paper" id="modeBadge">PAPER</span>
         </a>
@@ -44,16 +47,6 @@
         </div>
     </nav>
 
-    {% if warnings %}
-    <div class="warning-banner">
-        <strong>WARNING</strong>
-        <ul>
-            {% for w in warnings %}
-            <li>{{ w }}</li>
-            {% endfor %}
-        </ul>
-    </div>
-    {% endif %}
 
     <main class="container">
         {% block content %}{% endblock %}
