@@ -130,3 +130,76 @@ function toggle(el) {
     if (typeof el === 'string') el = document.getElementById(el);
     if (el) el.classList.toggle('hidden');
 }
+
+// Status Row functionality
+async function refreshStatusRow() {
+    try {
+        const resp = await fetch('/status');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        
+        updateServiceStatus('whop', data.whop);
+        updateServiceStatus('alpaca', data.alpaca);
+        updateServiceStatus('tradier', data.tradier);
+        updateModeStatus(data.mode);
+    } catch (e) {
+        console.error('Failed to refresh status:', e);
+    }
+}
+
+function updateServiceStatus(service, info) {
+    const el = document.getElementById('status-' + service);
+    if (!el || !info) return;
+    
+    const dot = el.querySelector('.status-dot');
+    if (dot) {
+        dot.className = 'status-dot';
+        const statusMap = {
+            'ok': 'status-ok',
+            'fail': 'status-fail',
+            'warn': 'status-warn',
+            'unknown': 'status-unknown'
+        };
+        dot.classList.add(statusMap[info.status] || 'status-unknown');
+    }
+    
+    let tooltip = service.toUpperCase() + ': ';
+    tooltip += info.summary || 'Unknown';
+    if (info.last_checked) {
+        tooltip += ' (checked: ' + formatTimestamp(info.last_checked) + ')';
+    }
+    el.title = tooltip;
+}
+
+function updateModeStatus(mode) {
+    const badge = document.getElementById('modeBadge');
+    if (!badge || !mode) return;
+    
+    const effective = mode.effective || 'paper';
+    badge.textContent = effective.toUpperCase();
+    badge.className = 'mode-badge';
+    
+    if (effective === 'live') {
+        badge.classList.add('mode-live');
+    } else {
+        badge.classList.add('mode-paper');
+    }
+}
+
+async function setExecutionMode(mode) {
+    try {
+        const resp = await fetch('/mode/set', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: mode })
+        });
+        const data = await resp.json();
+        if (data.mode) {
+            updateModeStatus(data.mode);
+        }
+        return data;
+    } catch (e) {
+        console.error('Failed to set mode:', e);
+        throw e;
+    }
+}

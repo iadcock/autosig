@@ -2,6 +2,19 @@
 {% block title %}Brokers - Trading Bot{% endblock %}
 
 {% block content %}
+<div class="card">
+    <h3 class="card-title">Whop Alerts</h3>
+    <p class="text-muted mb-2">Test connectivity to Whop alerts feed and verify authentication.</p>
+    
+    <div class="btn-row">
+        <button id="btn-whop-health" class="btn btn-sm" onclick="runHealthCheck('whop')">
+            Health Check
+        </button>
+    </div>
+    
+    <div id="results-whop" class="mt-2 hidden"></div>
+</div>
+
 <div class="grid-2">
     <div class="card">
         <h3 class="card-title">Alpaca (Paper Trading)</h3>
@@ -84,7 +97,12 @@ async function runHealthCheck(broker) {
     try {
         const data = await postJSON(`/health/${broker}`, {});
         results.innerHTML = buildResultsTable(data.steps || []);
-        showSuccess(btn, 'Done!');
+        if (data.success) {
+            showSuccess(btn, 'Done!');
+        } else {
+            showError(btn, 'Failed');
+        }
+        refreshStatusRow();
     } catch (error) {
         results.innerHTML = '<p class="result-fail">Health check failed</p>';
         showError(btn, 'Error');

@@ -12,6 +12,9 @@ from flask import Flask, send_file, render_template_string, render_template, req
 
 from app_config import config
 from settings_store import load_settings, save_settings, reset_to_defaults
+from status_store import get_all_statuses, update_service_status, update_mode, get_mode
+from whop_health_check import whop_health_check
+from broker_health_checks import alpaca_health_check, tradier_health_check
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
 from env_loader import diagnose_env
@@ -1882,6 +1885,78 @@ def api_get_logs():
                     pass
     logs.reverse()
     return jsonify({"logs": logs[:limit]})
+
+
+# --- Status API ---
+
+@app.route("/status")
+def get_status():
+    """Get all service statuses (public endpoint, no secrets)."""
+    return jsonify(get_all_statuses())
+
+
+@app.route("/health/whop", methods=["POST"])
+@login_required
+def health_whop():
+    """Run Whop health check."""
+    result = whop_health_check()
+    status = "ok" if result.get("success") else "fail"
+    summary = f"{result.get('alerts_fetched', 0)} alerts fetched"
+    update_service_status("whop", status, summary)
+    return jsonify(result)
+
+
+@app.route("/health/alpaca", methods=["POST"])
+@login_required
+def health_alpaca():
+    """Run Alpaca health check."""
+    result = alpaca_health_check()
+    status = "ok" if result.get("success") else "fail"
+    steps = result.get("steps", [])
+    summary = steps[-1].get("summary", "") if steps else "Check complete"
+    update_service_status("alpaca", status, summary)
+    return jsonify(result)
+
+
+@app.route("/health/tradier", methods=["POST"])
+@login_required
+def health_tradier():
+    """Run Tradier health check."""
+    result = tradier_health_check()
+    status = "ok" if result.get("success") else "fail"
+    steps = result.get("steps", [])
+    summary = steps[-1].get("summary", "") if steps else "Check complete"
+    update_service_status("tradier", status, summary)
+    return jsonify(result)
+
+
+@app.route("/mode/set", methods=["POST"])
+@login_required
+def set_mode():
+    """Set execution mode (paper/live)."""
+    data = request.get_json() or {}
+    requested = data.get("mode", "paper").lower()
+    
+    if requested not in ("paper", "live"):
+        return jsonify({"error": "Invalid mode. Use 'paper' or 'live'"}), 400
+    
+    if requested == "live" and not config.LIVE_TRADING:
+        effective = "paper"
+        message = "Live trading is disabled. LIVE_TRADING env var must be true."
+    else:
+        effective = requested
+        message = f"Mode set to {effective}"
+    
+    update_mode(requested, effective)
+    
+    return jsonify({
+        "success": True,
+        "message": message,
+        "mode": {
+            "requested": requested,
+            "effective": effective
+        }
+    })
 
 
 if __name__ == "__main__":

@@ -7,6 +7,24 @@
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+    <div class="status-row" id="statusRow">
+        <a href="/brokers" class="status-item" id="status-whop" title="Whop: Never checked">
+            <span class="status-dot status-unknown"></span>
+            <span class="status-label">WHOP</span>
+        </a>
+        <a href="/brokers" class="status-item" id="status-alpaca" title="Alpaca: Never checked">
+            <span class="status-dot status-unknown"></span>
+            <span class="status-label">ALPACA</span>
+        </a>
+        <a href="/brokers" class="status-item" id="status-tradier" title="Tradier: Never checked">
+            <span class="status-dot status-unknown"></span>
+            <span class="status-label">TRADIER</span>
+        </a>
+        <a href="/settings" class="status-item mode-item" id="status-mode" title="Execution Mode">
+            <span class="mode-badge mode-paper" id="modeBadge">PAPER</span>
+        </a>
+    </div>
+
     <nav class="top-nav">
         <div class="nav-brand">Trading Bot</div>
         <div class="nav-links">
@@ -39,6 +57,12 @@
     </main>
 
     <script src="/static/app.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshStatusRow();
+            setInterval(refreshStatusRow, 30000);
+        });
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

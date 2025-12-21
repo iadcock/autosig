@@ -1,0 +1,176 @@
+Add a Whop Alerts Health/Smoke Test button, a SAFE Paper vs Live trading mode toggle,
+AND a global Status Row that shows real-time system health at a glance.
+
+CONTEXT:
+- App already has tabs/pages (Dashboard / Review / Brokers / Settings / Logs).
+- We already have preflight + dedupe + review queue + executors.
+- We already have broker health checks (Alpaca + Tradier).
+- Whop fetching exists but can return login pages if session expires.
+- We need:
+  1) Whop smoke test
+  2) Paper vs Live toggle (safe)
+  3) A single Status Row visible at all times
+
+────────────────────────────────────────
+A) WHOP Health / Smoke Test (NO trading)
+────────────────────────────────────────
+(Create whop_health_check.py — unchanged from previous prompt)
+
+[Keep ALL logic exactly as previously specified]
+
+Endpoint:
+POST /health/whop
+
+────────────────────────────────────────
+B) Trading Mode Toggle (Paper vs Live) — SAFE
+────────────────────────────────────────
+(Create execution mode toggle — unchanged from previous prompt)
+
+Key concepts:
+- requested_mode vs effective_mode
+- LIVE_TRADING env gate
+- execution always uses effective_mode
+- auto mode remains paper-only
+
+Endpoints:
+POST /mode/set
+GET  /api/settings
+
+────────────────────────────────────────
+C) GLOBAL STATUS ROW (NEW)
+────────────────────────────────────────
+Add a persistent Status Row displayed at the top of ALL pages
+(using base.html so it appears everywhere).
+
+The Status Row must show 4 indicators:
+
+1) WHOP
+2) ALPACA
+3) TRADIER
+4) MODE (PAPER / LIVE)
+
+Each indicator must be color-coded and labeled.
+
+Example layout (left → right):
+[ WHOP ● ] [ ALPACA ● ] [ TRADIER ● ] [ MODE: PAPER ]
+
+──────────────────────────────
+Status indicator states
+──────────────────────────────
+For WHOP / ALPACA / TRADIER:
+- GREEN  → last health check success
+- RED    → last health check failed
+- GREY   → never checked yet
+- YELLOW → warning / partial (optional, if parsing failed but fetch OK)
+
+For MODE:
+- PAPER → grey/blue badge
+- LIVE  → RED badge (visually obvious and alarming)
+
+──────────────────────────────
+D) Status State Storage
+──────────────────────────────
+Create file: status_store.py
+
+Persist latest known statuses to:
+data/status.json
+
+Structure:
+{
+  "whop": {
+    "status": "ok|fail|warn|unknown",
+    "last_checked": "<iso>",
+    "summary": "short string"
+  },
+  "alpaca": {
+    "status": "ok|fail|warn|unknown",
+    "last_checked": "<iso>",
+    "summary": "short string"
+  },
+  "tradier": {
+    "status": "ok|fail|warn|unknown",
+    "last_checked": "<iso>",
+    "summary": "short string"
+  },
+  "mode": {
+    "requested": "paper|live",
+    "effective": "paper|live"
+  }
+}
+
+Provide helpers:
+- update_service_status(service, status, summary)
+- get_all_statuses()
+
+Health check endpoints must update status_store automatically.
+
+Mode toggle endpoint must update mode status.
+
+──────────────────────────────
+E) Status API
+──────────────────────────────
+Add endpoint:
+GET /status
+
+Returns:
+{
+  "whop": {...},
+  "alpaca": {...},
+  "tradier": {...},
+  "mode": {...}
+}
+
+This endpoint is read-only and exposes NO secrets.
+
+──────────────────────────────
+F) UI Rendering
+──────────────────────────────
+In templates/base.html:
+
+- Add a fixed or sticky Status Row at top.
+- Load statuses via:
+  - server-side render on page load
+  - AND periodic refresh via JS (every 30–60 seconds)
+
+Use small colored dots or badges:
+- Green ● OK
+- Red ● FAIL
+- Grey ● UNKNOWN
+- Yellow ● WARN
+
+Hover or click behavior:
+- Tooltip showing:
+  - last_checked time
+  - summary
+- Clicking a service badge navigates to:
+  - WHOP → Brokers page (Whop section)
+  - ALPACA → Brokers page
+  - TRADIER → Brokers page
+  - MODE → Settings page
+
+──────────────────────────────
+G) Update Health Check Buttons
+──────────────────────────────
+After running any health check:
+- Immediately update the Status Row
+- Do NOT require page refresh
+- Reflect success/failure instantly
+
+────────────────────────────────────────
+H) Acceptance Criteria
+────────────────────────────────────────
+1) Status Row is visible on ALL pages.
+2) Status Row shows:
+   - Whop health
+   - Alpaca health
+   - Tradier health
+   - Current execution mode (paper/live).
+3) Running a health check updates the status indicator.
+4) Mode toggle updates MODE indicator immediately.
+5) Defaults on first load:
+   - WHOP / ALPACA / TRADIER = UNKNOWN
+   - MODE = PAPER
+6) No secrets are exposed.
+7) Health checks place NO trades.
+8) Live trading remains safely gated.
+
