@@ -6,6 +6,13 @@ An automated trading bot that processes options trade alerts from Whop and execu
 
 ## Recent Changes
 
+- 2024-12-21: Refactored dashboard UI with tabbed navigation
+  - New templates folder with Jinja2 templates (base.html, dashboard.html, review.html, brokers.html, settings.html, logs.html)
+  - New static folder with CSS and JavaScript (styles.css, app.js)
+  - New settings_store.py for persistent settings (saves to data/settings.json)
+  - Tabbed navigation: Dashboard, Review Queue, Brokers, Settings, Logs
+  - API endpoints: /api/settings (GET/POST), /api/settings/reset, /api/logs
+  - Clean separation of concerns - each page handles one function
 - 2024-12-18: Added Broker Health Checks, Auto Mode, and PAPER Mirroring
   - New module: broker_health_checks.py - connectivity checks without trading
     - alpaca_health_check(): account, clock, SPY snapshot
