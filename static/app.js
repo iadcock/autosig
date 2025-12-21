@@ -143,8 +143,25 @@ async function refreshStatusRow() {
         updateServiceStatus('tradier', data.tradier);
         updateModeStatus(data.mode);
         updateRiskStatus(data.risk_mode);
+        updateLiveArmedStatus();
     } catch (e) {
         console.error('Failed to refresh status:', e);
+    }
+}
+
+async function updateLiveArmedStatus() {
+    try {
+        const resp = await fetch('/config');
+        if (!resp.ok) return;
+        const config = await resp.json();
+        
+        const liveArmedEl = document.getElementById('status-live-armed');
+        if (!liveArmedEl) return;
+        
+        const isArmed = config.live_trading === true && config.dry_run === false;
+        liveArmedEl.style.display = isArmed ? 'flex' : 'none';
+    } catch (e) {
+        console.error('Failed to check live armed status:', e);
     }
 }
 

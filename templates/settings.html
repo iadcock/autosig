@@ -2,6 +2,40 @@
 {% block title %}Settings - Trading Bot{% endblock %}
 
 {% block content %}
+<div id="live-mode-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+        <h3 class="modal-title"><span id="modal-mode-title">Enable LIVE Trading</span></h3>
+        <div class="modal-body">
+            <p><strong>Warning:</strong> You are about to enable <span id="modal-mode-name">LIVE</span> mode. This will execute trades with <strong>REAL MONEY</strong>.</p>
+            
+            <div class="modal-env-status">
+                <div class="modal-env-row">
+                    <span class="modal-env-key">LIVE_TRADING</span>
+                    <span class="modal-env-value" id="modal-env-live">--</span>
+                </div>
+                <div class="modal-env-row">
+                    <span class="modal-env-key">DRY_RUN</span>
+                    <span class="modal-env-value" id="modal-env-dry">--</span>
+                </div>
+                <div class="modal-env-row" id="modal-dual-row" style="display: none;">
+                    <span class="modal-env-key">ALLOW_DUAL_MODE</span>
+                    <span class="modal-env-value" id="modal-env-dual">--</span>
+                </div>
+            </div>
+            
+            <div class="modal-confirm-section">
+                <div class="modal-confirm-label">Type confirmation to proceed:</div>
+                <div class="modal-confirm-hint">Type "<span id="modal-confirm-phrase">ENABLE LIVE</span>" exactly</div>
+                <input type="text" id="modal-confirm-input" class="modal-confirm-input" placeholder="Type here..." autocomplete="off">
+            </div>
+        </div>
+        <div class="modal-buttons">
+            <button type="button" class="modal-btn modal-btn-cancel" onclick="cancelModeModal()">Cancel</button>
+            <button type="button" id="modal-confirm-btn" class="modal-btn modal-btn-confirm" disabled onclick="confirmModeModal()">Enable</button>
+        </div>
+    </div>
+</div>
+
 <div id="settings-warnings" class="warnings-container" style="display: none;"></div>
 
 <div class="card">
@@ -189,7 +223,11 @@ async function loadSettings() {
     try {
         const settings = await fetchJSON('/api/settings');
         
-        document.getElementById('setting-execution-mode').value = settings.REQUESTED_EXECUTION_MODE || 'paper';
+        const execMode = settings.REQUESTED_EXECUTION_MODE || 'paper';
+        document.getElementById('setting-execution-mode').value = execMode;
+        if (typeof previousModeValue !== 'undefined') {
+            previousModeValue = execMode;
+        }
         document.getElementById('setting-risk-mode').value = settings.RISK_MODE || 'balanced';
         document.getElementById('setting-paper-mirror').checked = settings.PAPER_MIRROR_ENABLED || false;
         document.getElementById('setting-0dte').checked = settings.ALLOW_0DTE_SPX || false;
@@ -264,14 +302,102 @@ document.getElementById('setting-risk-mode').addEventListener('change', function
     }
 });
 
-document.getElementById('settings-form').addEventListener('submit', async function(e) {
-    e.preventDefault();
+let pendingModeChange = null;
+let previousModeValue = 'paper';
+let cachedConfig = null;
+
+document.getElementById('setting-execution-mode').addEventListener('change', async function(e) {
+    const newMode = this.value;
     
+    if (newMode === 'paper') {
+        if (previousModeValue !== 'paper') {
+            previousModeValue = newMode;
+            await saveSettingsWithMode('paper');
+        }
+        return;
+    }
+    
+    this.value = previousModeValue;
+    
+    pendingModeChange = newMode;
+    await showModeModal(newMode);
+});
+
+async function showModeModal(mode) {
+    const modal = document.getElementById('live-mode-modal');
+    const titleEl = document.getElementById('modal-mode-title');
+    const nameEl = document.getElementById('modal-mode-name');
+    const phraseEl = document.getElementById('modal-confirm-phrase');
+    const inputEl = document.getElementById('modal-confirm-input');
+    const confirmBtn = document.getElementById('modal-confirm-btn');
+    const dualRow = document.getElementById('modal-dual-row');
+    
+    const isLive = mode === 'live';
+    const phrase = isLive ? 'ENABLE LIVE' : 'ENABLE DUAL';
+    
+    titleEl.textContent = isLive ? 'Enable LIVE Trading' : 'Enable DUAL Mode';
+    nameEl.textContent = mode.toUpperCase();
+    phraseEl.textContent = phrase;
+    inputEl.value = '';
+    inputEl.classList.remove('input-matched');
+    confirmBtn.disabled = true;
+    dualRow.style.display = isLive ? 'none' : 'flex';
+    
+    try {
+        const config = await fetchJSON('/config');
+        cachedConfig = config;
+        
+        const liveEl = document.getElementById('modal-env-live');
+        liveEl.textContent = config.live_trading ? 'true' : 'false';
+        liveEl.className = 'modal-env-value ' + (config.live_trading ? 'env-ok' : 'env-fail');
+        
+        const dryEl = document.getElementById('modal-env-dry');
+        const dryOk = config.dry_run === false;
+        dryEl.textContent = config.dry_run ? 'true' : 'false';
+        dryEl.className = 'modal-env-value ' + (dryOk ? 'env-ok' : 'env-fail');
+        
+        if (!isLive) {
+            const dualEl = document.getElementById('modal-env-dual');
+            dualEl.textContent = config.allow_dual_mode ? 'true' : 'false';
+            dualEl.className = 'modal-env-value ' + (config.allow_dual_mode ? 'env-ok' : 'env-fail');
+        }
+    } catch (e) {
+        console.error('Failed to fetch config for modal:', e);
+    }
+    
+    modal.style.display = 'flex';
+    inputEl.focus();
+}
+
+function cancelModeModal() {
+    const modal = document.getElementById('live-mode-modal');
+    modal.style.display = 'none';
+    pendingModeChange = null;
+    
+    document.getElementById('setting-execution-mode').value = previousModeValue;
+}
+
+async function confirmModeModal() {
+    const modal = document.getElementById('live-mode-modal');
+    const confirmedMode = pendingModeChange;
+    
+    modal.style.display = 'none';
+    
+    if (confirmedMode) {
+        document.getElementById('setting-execution-mode').value = confirmedMode;
+        previousModeValue = confirmedMode;
+        pendingModeChange = null;
+        
+        await saveSettingsWithMode(confirmedMode);
+    }
+}
+
+async function saveSettingsWithMode(execMode) {
     const btn = document.getElementById('btn-save');
     showSpinner(btn, 'Saving...');
     
     const settings = {
-        REQUESTED_EXECUTION_MODE: document.getElementById('setting-execution-mode').value || 'paper',
+        REQUESTED_EXECUTION_MODE: execMode,
         RISK_MODE: document.getElementById('setting-risk-mode').value || 'balanced',
         PAPER_MIRROR_ENABLED: document.getElementById('setting-paper-mirror').checked,
         ALLOW_0DTE_SPX: document.getElementById('setting-0dte').checked,
@@ -283,14 +409,6 @@ document.getElementById('settings-form').addEventListener('submit', async functi
         AUTO_MAX_TRADES_PER_DAY: parseInt(document.getElementById('setting-trades-day').value) || 10,
         AUTO_MAX_TRADES_PER_HOUR: parseInt(document.getElementById('setting-trades-hour').value) || 3
     };
-    
-    const execMode = document.getElementById('setting-execution-mode').value;
-    if (execMode === 'live' || execMode === 'dual') {
-        if (!confirm('WARNING: You are enabling ' + execMode.toUpperCase() + ' mode. This will execute trades with REAL MONEY. Continue?')) {
-            showError(btn, 'Cancelled');
-            return;
-        }
-    }
     
     try {
         const result = await postJSON('/api/settings', settings);
@@ -308,12 +426,43 @@ document.getElementById('settings-form').addEventListener('submit', async functi
             if (result.forced_changes && Object.keys(result.forced_changes).length > 0) {
                 loadSettings();
             }
+            
+            refreshStatusRow();
         } else {
             showError(btn, 'Failed');
+            document.getElementById('setting-execution-mode').value = 'paper';
+            previousModeValue = 'paper';
         }
     } catch (error) {
         showError(btn, 'Error');
+        document.getElementById('setting-execution-mode').value = 'paper';
+        previousModeValue = 'paper';
     }
+}
+
+document.getElementById('modal-confirm-input').addEventListener('input', function() {
+    const mode = pendingModeChange;
+    if (!mode) return;
+    const phrase = mode === 'live' ? 'ENABLE LIVE' : 'ENABLE DUAL';
+    const matched = this.value.trim().toUpperCase() === phrase;
+    
+    this.classList.toggle('input-matched', matched);
+    document.getElementById('modal-confirm-btn').disabled = !matched;
+});
+
+document.getElementById('modal-confirm-input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        const confirmBtn = document.getElementById('modal-confirm-btn');
+        if (!confirmBtn.disabled) {
+            confirmModeModal();
+        }
+    }
+});
+
+document.getElementById('settings-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const execMode = document.getElementById('setting-execution-mode').value || 'paper';
+    await saveSettingsWithMode(execMode);
 });
 
 async function resetSettings() {
