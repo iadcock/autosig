@@ -1713,10 +1713,13 @@ def health_check_tradier():
 def get_config():
     """Get current configuration (no secrets)."""
     from env_loader import load_env
+    dry_run_val = load_env("DRY_RUN") or "true"
+    dry_run = dry_run_val.lower() in ("true", "1", "yes", "on")
     return jsonify({
         "paper_mirror_enabled": (load_env("PAPER_MIRROR_ENABLED") or "").lower() == "true",
         "primary_live_broker": load_env("PRIMARY_LIVE_BROKER") or "tradier",
         "live_trading": (load_env("LIVE_TRADING") or "").lower() == "true",
+        "dry_run": dry_run,
         "auto_mode_enabled": (load_env("AUTO_MODE_ENABLED") or "").lower() == "true",
         "auto_poll_seconds": int(load_env("AUTO_POLL_SECONDS") or "30"),
         "auto_window_buffer_minutes": int(load_env("AUTO_WINDOW_BUFFER_MINUTES") or "60"),
@@ -1845,25 +1848,58 @@ def logs_page():
 @app.route("/api/settings")
 @login_required
 def api_get_settings():
-    """Get current settings."""
-    return jsonify(load_settings())
+    """Get current settings with effective behavior summary."""
+    from mode_manager import get_effective_behavior_summary
+    
+    settings = load_settings()
+    effective_behavior = get_effective_behavior_summary()
+    
+    return jsonify({
+        **settings,
+        "effective_behavior": effective_behavior
+    })
 
 
 @app.route("/api/settings", methods=["POST"])
 @login_required
 def api_save_settings():
-    """Save settings."""
+    """Save settings with safety validation and warnings."""
+    from mode_manager import validate_settings_safety, get_effective_behavior_summary
+    
     data = request.get_json() or {}
-    success = save_settings(data)
-    return jsonify({"success": success, "settings": load_settings()})
+    
+    validation = validate_settings_safety(data)
+    validated_settings = validation["validated_settings"]
+    warnings = validation["warnings"]
+    forced_changes = validation["forced_changes"]
+    
+    success = save_settings(validated_settings)
+    
+    effective_behavior = get_effective_behavior_summary()
+    
+    return jsonify({
+        "success": success,
+        "settings": load_settings(),
+        "warnings": warnings,
+        "forced_changes": forced_changes,
+        "effective_behavior": effective_behavior
+    })
 
 
 @app.route("/api/settings/reset", methods=["POST"])
 @login_required
 def api_reset_settings():
     """Reset settings to defaults."""
+    from mode_manager import get_effective_behavior_summary
+    
     settings = reset_to_defaults()
-    return jsonify({"success": True, "settings": settings})
+    effective_behavior = get_effective_behavior_summary()
+    
+    return jsonify({
+        "success": True,
+        "settings": settings,
+        "effective_behavior": effective_behavior
+    })
 
 
 # --- Logs API ---

@@ -25,6 +25,12 @@ The bot is built around a modular architecture with distinct components for scra
   - **Live**: Real money trading (requires `LIVE_TRADING=true`, `DRY_RUN=false`)
   - **Dual**: Live trading + paper mirror for verification (requires `ALLOW_DUAL_MODE=true`)
   - Safety gates automatically fall back to paper mode if environment flags aren't properly set.
+- **Execution Safety Enforcement**: Multiple layers of safety validation:
+  - `validate_settings_safety()` enforces invariants when saving settings (e.g., 0DTE SPX locked unless aggressive mode)
+  - `preflight_check()` validates execution mode against environment flags before every trade
+  - EXIT signals are always allowed regardless of risk mode (to reduce risk)
+  - UI displays "Effective Behavior" summary showing actual system behavior vs requested settings
+  - Yellow warning banners shown when settings have safety implications
 - **Position Tracking**: Maintains a JSONL-backed store for tracking paper trading positions, including opening and closing of trades.
 - **Idempotency**: Prevents duplicate executions of signals using a JSONL-backed deduplication store.
 - **Review Queue**: Allows manual review and approval/rejection of signals before execution.

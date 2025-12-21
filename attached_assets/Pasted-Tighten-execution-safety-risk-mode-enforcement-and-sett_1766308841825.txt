@@ -1,0 +1,152 @@
+Tighten execution safety, risk mode enforcement, and settings invariants
+based on the current Settings UI.
+
+CONTEXT:
+- The Settings page already exists with:
+  - Execution Mode (Paper / Live / Dual)
+  - Risk Mode (Conservative / Balanced / Aggressive)
+  - Allow 0DTE SPX toggle
+  - Paper Mirror toggle
+  - Auto mode settings
+  - Safety Status tiles (Live Trading / Dry Run / Auto Mode)
+- The UI is correct, but server-side enforcement must be made authoritative.
+- The server must always be the source of truth.
+
+GOALS:
+1) Prevent contradictory or unsafe states
+2) Ensure toggles cannot drift out of sync
+3) Make “Effective Behavior” explicit and unambiguous
+4) Ensure preflight blocks correctly in ALL cases (manual + auto)
+
+────────────────────────────────────────
+A) Enforce Execution Mode vs Risk Mode (CRITICAL)
+────────────────────────────────────────
+In preflight_check():
+
+- Always evaluate BOTH:
+  1) Effective Execution Mode (paper | live | dual)
+  2) Risk Mode (conservative | balanced | aggressive)
+
+Rules:
+- Execution Mode controls *where* trades execute
+- Risk Mode controls *what* trades are allowed
+- Neither may override the other
+
+Examples to enforce:
+- Conservative + Live → live allowed BUT long stock entries blocked
+- Aggressive + Paper → paper trades only, aggressive rules apply
+- Dual + Conservative → live + paper mirror, BUT conservative rules apply
+- Any mode → EXIT signals always allowed
+
+If blocked:
+- Set preflight.ok = false
+- Provide explicit blocked_reason
+  e.g. “Blocked by CONSERVATIVE mode: long entries disabled”
+
+────────────────────────────────────────
+B) Lock Allow 0DTE SPX toggle
+────────────────────────────────────────
+Enforce server-side invariants:
+
+- If RISK_MODE != "aggressive":
+    - force allow_0dte_spx = false
+    - ignore any client request to enable it
+    - return warning message
+
+- If user switches Risk Mode away from aggressive:
+    - automatically disable allow_0dte_spx
+    - persist disabled state
+
+Return warnings such as:
+“0DTE SPX disabled because Risk Mode is not Aggressive”
+
+────────────────────────────────────────
+C) Make Safety Status tiles authoritative
+────────────────────────────────────────
+Update Safety Status computation:
+
+LIVE TRADING tile:
+- ENABLED only if:
+    LIVE_TRADING == true
+    AND effective_execution_mode in {"live","dual"}
+- Otherwise DISABLED
+
+DRY RUN tile:
+- ENABLED if DRY_RUN == true
+- DISABLED if DRY_RUN == false
+- If LIVE_TRADING == true AND DRY_RUN == false:
+    - render tile in RED
+    - show warning text:
+      “DRY_RUN disabled while LIVE_TRADING is enabled”
+
+AUTO MODE tile:
+- ENABLED only if auto_mode_enabled == true
+- Add tooltip:
+  “Auto mode always runs PAPER-only”
+
+────────────────────────────────────────
+D) Add Effective Behavior summary
+────────────────────────────────────────
+Create server-side helper:
+get_effective_behavior_summary()
+
+Return a single computed object:
+{
+  "execution": "paper | live | dual",
+  "risk_mode": "conservative | balanced | aggressive",
+  "paper_mirror": true|false,
+  "allow_0dte_spx": true|false,
+  "auto_mode": true|false,
+  "summary_text": "Paper trades only · Aggressive rules · Paper mirror ON · Auto OFF"
+}
+
+Rules:
+- Summary must reflect *effective* state, not requested state
+- Must consider env gating (LIVE_TRADING, DRY_RUN)
+
+Expose via:
+GET /api/settings (add effective_behavior field)
+
+UI:
+- Display summary text directly under Save / Reset buttons
+- Read-only
+- Update immediately after Save
+
+────────────────────────────────────────
+E) Validate and warn on Save Settings
+────────────────────────────────────────
+On POST /api/settings:
+
+1) Apply requested changes
+2) Run server-side validation:
+   - Execution Mode vs env gating
+   - Risk Mode vs toggles
+   - Auto mode safety
+3) If any requested setting is overridden:
+   - return warnings array
+
+Example warnings:
+- “Requested LIVE mode blocked by server configuration; falling back to PAPER”
+- “Allow 0DTE SPX disabled due to Risk Mode”
+- “Paper mirror disabled for LIVE-only execution”
+
+UI:
+- Show warnings as yellow banners after Save
+
+────────────────────────────────────────
+F) Final safety guarantees (non-negotiable)
+────────────────────────────────────────
+- UI state can NEVER force live execution
+- preflight_check blocks unsafe trades even if UI is wrong
+- AUTO mode remains PAPER-only
+- EXIT trades are never blocked by Risk Mode
+- Any invalid combination falls back safely and visibly
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+1) No toggle can contradict another after Save.
+2) Unsafe combinations are auto-corrected server-side.
+3) User is clearly informed when corrections occur.
+4) Effective Behavior summary always matches actual execution.
+5) preflight_check enforces everything consistently.

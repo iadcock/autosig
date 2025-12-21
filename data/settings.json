@@ -8,5 +8,6 @@
   "ALLOW_0DTE_SPX": true,
   "AUTO_MAX_TRADES_PER_DAY": 10,
   "AUTO_MAX_TRADES_PER_HOUR": 3,
-  "RISK_MODE": "aggressive"
+  "RISK_MODE": "aggressive",
+  "REQUESTED_EXECUTION_MODE": "paper"
 }

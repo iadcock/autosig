@@ -227,9 +227,28 @@ def check_supported_assets(trade_intent: dict, checks: list) -> None:
 
 
 def check_risk_mode(parsed_signal: dict, trade_intent: dict, settings: dict, checks: list) -> None:
-    """Check if current risk mode allows this trade."""
+    """
+    Check if current risk mode allows this trade.
+    
+    EXIT signals are always allowed regardless of risk mode.
+    This ensures we can always close positions to reduce risk.
+    """
+    metadata = trade_intent.get("metadata", {})
+    signal_type = metadata.get("signal_type", "")
+    
+    if signal_type == "EXIT":
+        checks.append({
+            "name": "risk_mode",
+            "ok": True,
+            "summary": "EXIT signal - always allowed regardless of risk mode"
+        })
+        return
+    
     risk_mode = settings.get("risk_mode", "balanced")
     allow_0dte = settings.get("allow_0dte_spx", False)
+    
+    if risk_mode != "aggressive":
+        allow_0dte = False
     
     allowed, block_reason = check_risk_mode_allows(
         parsed_signal, trade_intent, risk_mode, allow_0dte
@@ -334,27 +353,49 @@ def check_dte_guard(trade_intent: dict, settings: dict, checks: list) -> None:
 
 
 def check_mode_guard(execution_mode: str, checks: list) -> None:
-    """Check if execution mode is allowed."""
+    """
+    Check if execution mode is allowed.
+    
+    Uses mode_manager to validate execution mode against environment flags.
+    This ensures UI state can never force live execution without proper
+    environment configuration.
+    """
+    from mode_manager import get_effective_execution_mode, is_live_allowed
+    
     mode = execution_mode.lower()
     
     if mode == "live":
-        if not LIVE_TRADING:
+        if not is_live_allowed():
             checks.append({
                 "name": "mode_guard",
                 "ok": False,
-                "summary": "LIVE_TRADING disabled - set LIVE_TRADING=true to enable"
+                "summary": "LIVE trading blocked: LIVE_TRADING=false or DRY_RUN=true"
             })
             return
         checks.append({
             "name": "mode_guard",
             "ok": True,
-            "summary": "Live trading is enabled"
+            "summary": "Live trading is enabled and allowed"
+        })
+    elif mode == "dual":
+        mode_info = get_effective_execution_mode()
+        if mode_info["effective"] != "dual":
+            checks.append({
+                "name": "mode_guard",
+                "ok": False,
+                "summary": f"DUAL mode not allowed: {mode_info['message']}"
+            })
+            return
+        checks.append({
+            "name": "mode_guard",
+            "ok": True,
+            "summary": "Dual mode is enabled and allowed"
         })
     elif mode == "paper":
         checks.append({
             "name": "mode_guard",
             "ok": True,
-            "summary": "Paper trading mode"
+            "summary": "Paper trading mode (always allowed)"
         })
     else:
         checks.append({

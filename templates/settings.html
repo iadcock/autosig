@@ -2,6 +2,8 @@
 {% block title %}Settings - Trading Bot{% endblock %}
 
 {% block content %}
+<div id="settings-warnings" class="warnings-container" style="display: none;"></div>
+
 <div class="card">
     <h3 class="card-title">Trading Settings</h3>
     <p class="text-muted mb-3">Configure trading parameters. Changes are saved and persist across restarts.</p>
@@ -93,6 +95,12 @@
             <button type="submit" id="btn-save" class="btn">Save Settings</button>
             <button type="button" id="btn-reset" class="btn btn-gray" onclick="resetSettings()">Reset to Defaults</button>
         </div>
+        
+        <div id="effective-behavior" class="effective-behavior-box" style="display: none;">
+            <h4>Effective Behavior</h4>
+            <div id="behavior-summary" class="effective-behavior-text"></div>
+            <div id="behavior-warnings"></div>
+        </div>
     </form>
 </div>
 
@@ -118,6 +126,65 @@
 
 {% block scripts %}
 <script>
+function updateEffectiveBehavior(behavior) {
+    if (!behavior) return;
+    
+    const box = document.getElementById('effective-behavior');
+    const summary = document.getElementById('behavior-summary');
+    const warningsEl = document.getElementById('behavior-warnings');
+    
+    if (box && summary) {
+        box.style.display = 'block';
+        summary.textContent = behavior.summary_text || '';
+        
+        warningsEl.innerHTML = '';
+        if (behavior.warnings && behavior.warnings.length > 0) {
+            behavior.warnings.forEach(w => {
+                const div = document.createElement('div');
+                div.className = w.includes('LIVE') ? 'behavior-danger' : 'behavior-warning';
+                div.textContent = w;
+                warningsEl.appendChild(div);
+            });
+        }
+    }
+    
+    const zerodte = document.getElementById('setting-0dte');
+    const riskMode = document.getElementById('setting-risk-mode').value;
+    if (zerodte) {
+        if (riskMode !== 'aggressive') {
+            zerodte.disabled = true;
+            zerodte.checked = false;
+            zerodte.parentElement.title = '0DTE SPX is only available in Aggressive risk mode';
+        } else {
+            zerodte.disabled = false;
+            zerodte.parentElement.title = '';
+        }
+    }
+}
+
+function showSettingsWarnings(warnings) {
+    const container = document.getElementById('settings-warnings');
+    if (!container) return;
+    
+    if (!warnings || warnings.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    container.innerHTML = '';
+    warnings.forEach(w => {
+        const div = document.createElement('div');
+        div.className = 'warning-item';
+        div.textContent = w;
+        container.appendChild(div);
+    });
+    container.style.display = 'block';
+    
+    setTimeout(() => {
+        container.style.display = 'none';
+    }, 10000);
+}
+
 async function loadSettings() {
     try {
         const settings = await fetchJSON('/api/settings');
@@ -133,6 +200,10 @@ async function loadSettings() {
         document.getElementById('setting-positions').value = settings.MAX_OPEN_POSITIONS || 20;
         document.getElementById('setting-trades-day').value = settings.AUTO_MAX_TRADES_PER_DAY || 10;
         document.getElementById('setting-trades-hour').value = settings.AUTO_MAX_TRADES_PER_HOUR || 3;
+        
+        if (settings.effective_behavior) {
+            updateEffectiveBehavior(settings.effective_behavior);
+        }
         
     } catch (error) {
         console.error('Failed to load settings:', error);
@@ -157,19 +228,41 @@ async function loadSettings() {
         const config = await fetchJSON('/config');
         
         const liveEl = document.getElementById('live-trading-status');
-        liveEl.textContent = config.live_trading ? 'ENABLED' : 'DISABLED';
-        liveEl.className = 'stat-value ' + (config.live_trading ? 'result-fail' : 'result-ok');
+        const behavior = await fetchJSON('/api/settings').then(s => s.effective_behavior);
+        const liveActive = behavior && behavior.live_trading_active;
+        liveEl.textContent = liveActive ? 'ACTIVE' : (config.live_trading ? 'ENABLED' : 'DISABLED');
+        liveEl.className = 'stat-value ' + (liveActive ? 'result-fail' : (config.live_trading ? 'result-warn' : 'result-ok'));
         
         const autoEl = document.getElementById('auto-mode-status');
         autoEl.textContent = config.auto_mode_enabled ? 'ENABLED' : 'DISABLED';
         autoEl.className = 'stat-value ' + (config.auto_mode_enabled ? 'result-warn' : 'result-ok');
+        autoEl.title = 'Auto mode always runs PAPER-only unless AUTO_LIVE_ENABLED=true';
         
-        document.getElementById('dry-run-status').textContent = 'CHECK ENV';
+        const dryRunEl = document.getElementById('dry-run-status');
+        if (config.dry_run === false && config.live_trading) {
+            dryRunEl.textContent = 'OFF (LIVE)';
+            dryRunEl.className = 'stat-value result-fail';
+        } else {
+            dryRunEl.textContent = config.dry_run ? 'ON' : 'OFF';
+            dryRunEl.className = 'stat-value ' + (config.dry_run ? 'result-ok' : 'result-warn');
+        }
         
     } catch (error) {
         console.error('Failed to load config:', error);
     }
 }
+
+document.getElementById('setting-risk-mode').addEventListener('change', function() {
+    const zerodte = document.getElementById('setting-0dte');
+    if (this.value !== 'aggressive') {
+        zerodte.disabled = true;
+        zerodte.checked = false;
+        zerodte.parentElement.title = '0DTE SPX is only available in Aggressive risk mode';
+    } else {
+        zerodte.disabled = false;
+        zerodte.parentElement.title = '';
+    }
+});
 
 document.getElementById('settings-form').addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -203,6 +296,18 @@ document.getElementById('settings-form').addEventListener('submit', async functi
         const result = await postJSON('/api/settings', settings);
         if (result.success) {
             showSuccess(btn, 'Saved!');
+            
+            if (result.warnings && result.warnings.length > 0) {
+                showSettingsWarnings(result.warnings);
+            }
+            
+            if (result.effective_behavior) {
+                updateEffectiveBehavior(result.effective_behavior);
+            }
+            
+            if (result.forced_changes && Object.keys(result.forced_changes).length > 0) {
+                loadSettings();
+            }
         } else {
             showError(btn, 'Failed');
         }
