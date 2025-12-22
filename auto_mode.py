@@ -26,7 +26,7 @@ AUTO_STATE_FILE = "data/auto_state.json"
 
 _auto_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
-_auto_enabled = False
+_auto_enabled = True
 
 
 def _load_counters() -> Dict[str, Any]:
