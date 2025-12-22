@@ -1,0 +1,191 @@
+Implement “No-Fill vs Fill” Smoke Tests for Alpaca and Tradier.
+
+PROBLEM:
+Full smoke tests that do buy→confirm position→sell are only reliable during regular market hours (RTH).
+When market is closed, orders may be accepted but not filled, causing false failures.
+
+GOAL:
+Make smoke tests deterministic by automatically choosing:
+- NO-FILL MODE when market is closed (place/cancel or place + verify accepted)
+- FILL MODE when market is open (place → confirm fill/position → close)
+
+Also update the UI so the user clearly sees which mode was used.
+
+────────────────────────────────────────
+A) Market Session Detection (single source of truth)
+────────────────────────────────────────
+Create file: market_session.py
+
+Implement:
+get_market_session_status() -> dict
+
+Use Alpaca clock endpoint:
+GET /v2/clock  (paper base URL)
+
+Return:
+{
+  "is_open": bool,
+  "timestamp": "<iso>",
+  "next_open": "<iso|null>",
+  "next_close": "<iso|null>",
+  "session_label": "OPEN" | "CLOSED"
+}
+
+If the clock request fails:
+- Fail closed: treat is_open=false and set a reason "clock unavailable"
+
+Expose endpoint:
+GET /market/session -> returns above JSON
+
+────────────────────────────────────────
+B) Smoke Test Modes + Results Schema
+────────────────────────────────────────
+Standardize result format for both brokers:
+
+{
+  "broker": "alpaca"|"tradier",
+  "mode": "NO_FILL"|"FILL",
+  "success": true|false,
+  "timestamp": "<iso>",
+  "steps": [
+    { "name": str, "ok": bool, "status": int|str, "summary": str, "details": str|null }
+  ],
+  "order_ids": [ ... ],
+  "warnings": [ ... ]
+}
+
+- success=true only if ALL required steps pass for the selected mode.
+- If mode is NO_FILL, do not mark failure because position/fill is missing.
+
+────────────────────────────────────────
+C) Alpaca Smoke Test Implementation
+────────────────────────────────────────
+Update alpaca smoke test endpoint to auto-select mode:
+- If market is open -> FILL
+- If market is closed -> NO_FILL
+
+Create file: alpaca_smoke_test.py (or update existing)
+
+Use a stable test symbol:
+- default: "SPY"
+Allow override by env ALPACA_TEST_SYMBOL (optional)
+
+COMMON steps (both modes):
+1) Get Account
+2) Get Clock
+3) Get SPY Snapshot (market data)
+
+NO_FILL mode steps:
+4) Submit a LIMIT buy for 1 share at a price that will NOT fill:
+   - Use last trade price from snapshot
+   - limit_price = last_price * 0.50 (50% below)
+   - time_in_force="day"
+   - extended_hours=false
+5) Confirm order appears in “list orders” and status is accepted/new
+6) Cancel the order
+7) Confirm order status is canceled
+
+FILL mode steps (market open only):
+4) Submit a MARKET buy for 1 share (or a tight LIMIT near ask if you prefer)
+5) Poll order status until filled or timeout:
+   - poll every 2s up to 30s
+6) Confirm position increased (or order filled_qty==1)
+7) Submit a MARKET sell for 1 share
+8) Poll sell until filled or timeout (same)
+9) Confirm position is back to baseline or reduced by 1
+
+Important:
+- Track baseline position quantity before buying.
+- If fill doesn’t happen within timeout:
+  - mark FILL mode as failed with a clear reason “not filled within timeout”
+  - include warning to rerun later
+- Never run FILL mode when market closed.
+
+────────────────────────────────────────
+D) Tradier Smoke Test Implementation
+────────────────────────────────────────
+Update tradier smoke test endpoint to auto-select mode:
+- If market is open -> FILL for STOCK only (SPY)
+- If market is closed -> NO_FILL
+
+Create file: tradier_smoke_test.py (or update existing)
+
+COMMON steps (both modes):
+1) Get Profile / Accounts
+2) Get SPY Quote
+3) Get SPX Expirations
+4) Get SPX Option Chain (this is connectivity/data validation)
+
+NO_FILL mode steps (stocks):
+5) Submit a LIMIT BUY for 1 share of SPY far away from market so it won’t fill
+   - price = last * 0.50
+   - duration=day
+6) Confirm order is accepted via order status endpoint (or list orders)
+7) Cancel order
+8) Confirm canceled
+
+FILL mode steps (market open only, STOCK only):
+5) Submit MARKET BUY 1 SPY
+6) Poll order until filled or timeout (30s)
+7) Submit MARKET SELL 1 SPY
+8) Poll until filled or timeout
+9) Confirm via order status that both filled
+
+NOTE:
+- Tradier sandbox may have limitations reflecting positions.
+- Prefer validating filled status via order endpoints.
+- If sandbox cannot confirm fills reliably, report:
+  PASS (LIMITED): “sandbox limitation - fills not reflected”
+but only if order endpoints confirm accepted/filled.
+
+Options:
+- Do NOT attempt to fill SPX options in smoke tests for now.
+- Keep options chain checks as data validation only.
+
+────────────────────────────────────────
+E) UI Updates (Brokers page)
+────────────────────────────────────────
+On /brokers:
+- Replace “Full Smoke Test” button with a single button:
+  “Run Smoke Test”
+- Next to it display a badge showing mode that will run:
+  - If market open: “FILL MODE”
+  - If market closed: “NO-FILL MODE”
+- Also add small help text:
+  “NO-FILL verifies order acceptance + cancel. FILL verifies actual fills and closing.”
+
+When results are rendered:
+- Show the mode used at the top of the results table.
+- If NO-FILL mode: show green PASS with label “PASS (NO-FILL)”
+- If FILL mode: show green PASS with label “PASS (FILL)”
+- If FILL fails due to timeout: show red FAIL and suggestion “rerun during open market”
+
+Also update Status Row tooltips (optional):
+- Alpaca/Tradier status reflects last health/smoke run.
+
+────────────────────────────────────────
+F) Endpoints
+────────────────────────────────────────
+- GET /market/session
+- POST /smoke/alpaca   (auto-selects mode)
+- POST /smoke/tradier  (auto-selects mode)
+
+Keep existing /health endpoints unchanged (no trades).
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+1) When market is closed:
+   - Alpaca and Tradier smoke tests run NO-FILL
+   - place a far-limit order
+   - confirm accepted
+   - cancel
+   - confirm canceled
+   - marked PASS (NO-FILL) if those succeed
+2) When market is open:
+   - Alpaca and Tradier smoke tests run FILL mode for SPY
+   - confirm buy and sell fills (or order filled statuses)
+   - marked PASS (FILL)
+3) UI clearly labels which mode ran and why.
+4) No false failures due to market closed.
+5) No SPX options fill attempts in smoke tests.

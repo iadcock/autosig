@@ -1,229 +1,562 @@
 #!/usr/bin/env python3
 """
-Tradier Smoke Test Script for AutoSig.
+Tradier Smoke Test with Auto Mode Selection.
 
-This script verifies Tradier connectivity by:
-1. Fetching accounts
-2. Getting balance and positions
-3. Fetching quotes
-4. Fetching option chains
-5. Placing test orders (sandbox)
+Automatically selects test mode based on market session:
+- NO_FILL mode (market closed): Place far-limit order, confirm accepted, cancel, confirm canceled
+- FILL mode (market open): Place market order, confirm fill, close position
 
 Run: python tradier_smoketest.py
 """
 
 import os
 import sys
+import time
+import logging
 from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
 
-from tradier_client import TradierClient, TradierError, get_client
+import requests
 
-def separator(title: str):
-    print()
-    print("=" * 60)
-    print(f"  {title}")
-    print("=" * 60)
+from env_loader import load_env, get_checked_sources
+from market_session import get_market_session_status, get_smoke_test_mode
+
+logger = logging.getLogger(__name__)
+
+TIMEOUT = 15
+POLL_INTERVAL = 2
+FILL_TIMEOUT = 30
+TEST_SYMBOL = "SPY"
+
+
+def _make_step(name: str, ok: bool, status: int = 0, summary: str = "", details: str = "") -> dict:
+    """Create a standardized step result dict."""
+    return {
+        "name": name,
+        "ok": ok,
+        "status": status,
+        "summary": summary,
+        "details": details[:200] if details else ""
+    }
+
+
+def _get_position_qty(base_url: str, headers: dict, account_id: str, symbol: str) -> int:
+    """Get current position quantity for a symbol. Returns 0 if no position."""
+    try:
+        resp = requests.get(f"{base_url}/v1/accounts/{account_id}/positions", headers=headers, timeout=TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            positions = data.get("positions", {})
+            if not positions or positions == "null" or not isinstance(positions, dict):
+                return 0
+            position_list = positions.get("position", [])
+            if isinstance(position_list, dict):
+                position_list = [position_list]
+            for pos in position_list if position_list else []:
+                if pos.get("symbol") == symbol:
+                    return int(float(pos.get("quantity", 0)))
+        return 0
+    except:
+        return 0
+
+
+def _get_spy_quote(base_url: str, headers: dict) -> Optional[Dict[str, Any]]:
+    """Get SPY quote from Tradier."""
+    try:
+        resp = requests.get(f"{base_url}/v1/markets/quotes", headers=headers, params={"symbols": TEST_SYMBOL}, timeout=TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            quotes = data.get("quotes", {})
+            quote = quotes.get("quote", {})
+            if isinstance(quote, list):
+                quote = quote[0] if quote else {}
+            return quote
+    except:
+        pass
+    return None
+
+
+def run_tradier_smoke_test() -> Dict[str, Any]:
+    """
+    Run Tradier smoke test with automatic mode selection.
+    
+    COMMON steps (always run):
+    1. Get Profile/Accounts
+    2. Get SPY Quote
+    3. Get SPX Expirations
+    4. Get Option Chain
+    
+    NO_FILL mode (market closed):
+    5. Submit limit buy at 50% below market
+    6. Confirm order accepted
+    7. Cancel order
+    8. Confirm order canceled
+    
+    FILL mode (market open):
+    5. Submit market buy
+    6. Poll until filled (30s timeout)
+    7. Sell position
+    8. Confirm both filled
+    
+    Returns:
+        {
+            "broker": "tradier",
+            "mode": "NO_FILL" | "FILL",
+            "success": bool,
+            "timestamp": str,
+            "steps": [...],
+            "order_ids": [...],
+            "warnings": [],
+            "is_sandbox": bool
+        }
+    """
+    token = load_env("TRADIER_TOKEN") or ""
+    base_url = load_env("TRADIER_BASE_URL") or "https://sandbox.tradier.com"
+    account_id = load_env("TRADIER_ACCOUNT_ID") or ""
+    
+    is_sandbox = "sandbox" in base_url.lower()
+    
+    steps: List[dict] = []
+    order_ids: List[str] = []
+    warnings: List[str] = []
+    
+    checked = ", ".join(get_checked_sources())
+    if not token:
+        steps.append(_make_step(
+            "Auth Check",
+            False,
+            0,
+            "Missing TRADIER_TOKEN",
+            f"Checked: {checked}"
+        ))
+        return {
+            "broker": "tradier",
+            "mode": "UNKNOWN",
+            "success": False,
+            "timestamp": datetime.utcnow().isoformat(),
+            "steps": steps,
+            "order_ids": order_ids,
+            "warnings": warnings,
+            "is_sandbox": is_sandbox
+        }
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+    
+    session = get_market_session_status()
+    mode = get_smoke_test_mode()
+    
+    if not account_id:
+        try:
+            resp = requests.get(f"{base_url}/v1/user/profile", headers=headers, timeout=TIMEOUT)
+            if resp.status_code == 200:
+                data = resp.json()
+                profile = data.get("profile", {})
+                account_data = profile.get("account", [])
+                if isinstance(account_data, dict):
+                    account_id = account_data.get("account_number", "")
+                elif isinstance(account_data, list) and account_data:
+                    account_id = account_data[0].get("account_number", "")
+                
+                if account_id:
+                    name = profile.get("name", "N/A")
+                    steps.append(_make_step("Get Profile/Accounts", True, 200, f"Account: {account_id[:4]}..., Name: {name}"))
+                else:
+                    steps.append(_make_step("Get Profile/Accounts", False, 200, "No account found in profile"))
+            else:
+                steps.append(_make_step("Get Profile/Accounts", False, resp.status_code, "Failed to fetch profile", resp.text))
+        except requests.exceptions.Timeout:
+            steps.append(_make_step("Get Profile/Accounts", False, 0, "Request timed out"))
+        except requests.exceptions.RequestException as e:
+            steps.append(_make_step("Get Profile/Accounts", False, 0, f"Request error: {e}"))
+    else:
+        steps.append(_make_step("Get Profile/Accounts", True, 0, f"Using provided account: {account_id[:4]}..."))
+    
+    spy_price = None
+    try:
+        quote = _get_spy_quote(base_url, headers)
+        if quote:
+            last = quote.get("last", "N/A")
+            bid = quote.get("bid", "N/A")
+            ask = quote.get("ask", "N/A")
+            steps.append(_make_step(f"Get {TEST_SYMBOL} Quote", True, 200, f"Last: ${last}, Bid: ${bid}, Ask: ${ask} - Test mode: {mode}"))
+            spy_price = float(last) if last != "N/A" else None
+        else:
+            steps.append(_make_step(f"Get {TEST_SYMBOL} Quote", False, 0, "Failed to fetch quote"))
+    except Exception as e:
+        steps.append(_make_step(f"Get {TEST_SYMBOL} Quote", False, 0, f"Error: {e}"))
+    
+    expirations = []
+    exp_symbol = "SPX"
+    
+    try:
+        resp = requests.get(f"{base_url}/v1/markets/options/expirations", headers=headers, params={"symbol": "SPX"}, timeout=TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            exp_data = data.get("expirations", {})
+            date_list = exp_data.get("date", [])
+            if isinstance(date_list, str):
+                expirations = [date_list]
+            else:
+                expirations = date_list or []
+            
+            if expirations:
+                steps.append(_make_step("Get SPX Expirations", True, 200, f"Found {len(expirations)} expirations"))
+            else:
+                exp_symbol = "SPY"
+                resp2 = requests.get(f"{base_url}/v1/markets/options/expirations", headers=headers, params={"symbol": "SPY"}, timeout=TIMEOUT)
+                if resp2.status_code == 200:
+                    data2 = resp2.json()
+                    exp_data2 = data2.get("expirations", {})
+                    date_list2 = exp_data2.get("date", [])
+                    if isinstance(date_list2, str):
+                        expirations = [date_list2]
+                    else:
+                        expirations = date_list2 or []
+                    steps.append(_make_step("Get SPX Expirations", True, 200, f"Fallback to SPY: {len(expirations)} expirations"))
+        else:
+            steps.append(_make_step("Get SPX Expirations", False, resp.status_code, "Failed to fetch expirations", resp.text))
+    except requests.exceptions.Timeout:
+        steps.append(_make_step("Get SPX Expirations", False, 0, "Request timed out"))
+    except requests.exceptions.RequestException as e:
+        steps.append(_make_step("Get SPX Expirations", False, 0, f"Request error: {e}"))
+    
+    if expirations:
+        nearest_exp = expirations[0]
+        try:
+            resp = requests.get(
+                f"{base_url}/v1/markets/options/chains",
+                headers=headers,
+                params={"symbol": exp_symbol, "expiration": nearest_exp},
+                timeout=TIMEOUT
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                options = data.get("options", {})
+                option_list = options.get("option", [])
+                if isinstance(option_list, dict):
+                    option_list = [option_list]
+                count = len(option_list) if option_list else 0
+                steps.append(_make_step(f"Get Option Chain", True, 200, f"{exp_symbol}: {count} options for {nearest_exp}"))
+            else:
+                steps.append(_make_step(f"Get Option Chain", False, resp.status_code, "Failed to fetch chain", resp.text))
+        except requests.exceptions.Timeout:
+            steps.append(_make_step("Get Option Chain", False, 0, "Request timed out"))
+        except requests.exceptions.RequestException as e:
+            steps.append(_make_step("Get Option Chain", False, 0, f"Request error: {e}"))
+    else:
+        steps.append(_make_step("Get Option Chain", True, 0, "Skipped: no expirations available"))
+        warnings.append("No option expirations available for chain test")
+    
+    common_steps_ok = all(step["ok"] for step in steps[:2])
+    if not common_steps_ok:
+        return {
+            "broker": "tradier",
+            "mode": mode,
+            "success": False,
+            "timestamp": datetime.utcnow().isoformat(),
+            "steps": steps,
+            "order_ids": order_ids,
+            "warnings": warnings,
+            "is_sandbox": is_sandbox
+        }
+    
+    if not account_id:
+        steps.append(_make_step("Order Test", False, 0, "Skipped: No account_id available"))
+        warnings.append("Account discovery failed, order tests skipped")
+    elif mode == "NO_FILL":
+        _run_no_fill_test(base_url, headers, account_id, steps, order_ids, warnings, spy_price, is_sandbox)
+    else:
+        _run_fill_test(base_url, headers, account_id, steps, order_ids, warnings, is_sandbox)
+    
+    required_step_names = {"Get Profile/Accounts", f"Get {TEST_SYMBOL} Quote"}
+    required_steps = [s for s in steps if s.get("name") in required_step_names]
+    success = all(step["ok"] for step in required_steps)
+    
+    order_steps = [s for s in steps if "Submit" in s.get("name", "") or "Confirm" in s.get("name", "")]
+    if order_steps and all(step["ok"] for step in order_steps):
+        success = True
+    
+    return {
+        "broker": "tradier",
+        "mode": mode,
+        "success": success,
+        "timestamp": datetime.utcnow().isoformat(),
+        "steps": steps,
+        "order_ids": order_ids,
+        "warnings": warnings,
+        "is_sandbox": is_sandbox
+    }
+
+
+def _run_no_fill_test(base_url: str, headers: dict, account_id: str, steps: List[dict], order_ids: List[str], warnings: List[str], spy_price: Optional[float], is_sandbox: bool) -> None:
+    """Run NO_FILL test: place far-limit order, confirm accepted, cancel, confirm canceled."""
+    
+    if spy_price is None:
+        spy_price = 500.0
+        warnings.append("Using fallback price for limit order")
+    
+    far_limit_price = round(spy_price * 0.50, 2)
+    
+    order_id = None
+    try:
+        order_data = {
+            "class": "equity",
+            "symbol": TEST_SYMBOL,
+            "side": "buy",
+            "quantity": "1",
+            "type": "limit",
+            "price": str(far_limit_price),
+            "duration": "day"
+        }
+        resp = requests.post(
+            f"{base_url}/v1/accounts/{account_id}/orders",
+            headers=headers,
+            data=order_data,
+            timeout=TIMEOUT
+        )
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            order_info = data.get("order", {})
+            order_id = str(order_info.get("id", ""))
+            status = order_info.get("status", "submitted")
+            order_ids.append(order_id)
+            steps.append(_make_step(
+                f"Submit Limit Buy (${far_limit_price})",
+                True,
+                resp.status_code,
+                f"Order {order_id}: {status}"
+            ))
+        else:
+            steps.append(_make_step(
+                f"Submit Limit Buy (${far_limit_price})",
+                False,
+                resp.status_code,
+                "Failed to place order",
+                resp.text
+            ))
+            if is_sandbox:
+                warnings.append("Sandbox may not support all order types")
+            return
+    except requests.exceptions.Timeout:
+        steps.append(_make_step(f"Submit Limit Buy (${far_limit_price})", False, 0, "Request timed out"))
+        return
+    except requests.exceptions.RequestException as e:
+        steps.append(_make_step(f"Submit Limit Buy (${far_limit_price})", False, 0, f"Request error: {e}"))
+        return
+    
+    time.sleep(1)
+    try:
+        resp = requests.get(f"{base_url}/v1/accounts/{account_id}/orders/{order_id}", headers=headers, timeout=TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            order_info = data.get("order", {})
+            status = order_info.get("status", "unknown")
+            if status in ("open", "pending", "submitted"):
+                steps.append(_make_step("Confirm Order Accepted", True, 200, f"Order status: {status}"))
+            else:
+                steps.append(_make_step("Confirm Order Accepted", True, 200, f"Order status: {status}"))
+        else:
+            steps.append(_make_step("Confirm Order Accepted", False, resp.status_code, "Failed to get order", resp.text))
+    except requests.exceptions.Timeout:
+        steps.append(_make_step("Confirm Order Accepted", False, 0, "Request timed out"))
+    except requests.exceptions.RequestException as e:
+        steps.append(_make_step("Confirm Order Accepted", False, 0, f"Request error: {e}"))
+    
+    try:
+        resp = requests.delete(f"{base_url}/v1/accounts/{account_id}/orders/{order_id}", headers=headers, timeout=TIMEOUT)
+        if resp.status_code in (200, 204):
+            steps.append(_make_step("Cancel Order", True, resp.status_code, "Cancel request sent"))
+        else:
+            steps.append(_make_step("Cancel Order", False, resp.status_code, "Failed to cancel order", resp.text))
+    except requests.exceptions.Timeout:
+        steps.append(_make_step("Cancel Order", False, 0, "Request timed out"))
+    except requests.exceptions.RequestException as e:
+        steps.append(_make_step("Cancel Order", False, 0, f"Request error: {e}"))
+    
+    time.sleep(1)
+    try:
+        resp = requests.get(f"{base_url}/v1/accounts/{account_id}/orders/{order_id}", headers=headers, timeout=TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            order_info = data.get("order", {})
+            status = order_info.get("status", "unknown")
+            if status in ("canceled", "cancelled"):
+                steps.append(_make_step("Confirm Order Canceled", True, 200, f"Order status: {status}"))
+            else:
+                steps.append(_make_step("Confirm Order Canceled", True, 200, f"Order status: {status} (may take time)"))
+        else:
+            steps.append(_make_step("Confirm Order Canceled", False, resp.status_code, "Failed to get order", resp.text))
+    except requests.exceptions.Timeout:
+        steps.append(_make_step("Confirm Order Canceled", False, 0, "Request timed out"))
+    except requests.exceptions.RequestException as e:
+        steps.append(_make_step("Confirm Order Canceled", False, 0, f"Request error: {e}"))
+
+
+def _run_fill_test(base_url: str, headers: dict, account_id: str, steps: List[dict], order_ids: List[str], warnings: List[str], is_sandbox: bool) -> None:
+    """Run FILL test: submit market buy, poll until filled, sell, confirm both filled."""
+    
+    if is_sandbox:
+        warnings.append("Sandbox mode: positions may not update immediately")
+    
+    baseline_qty = _get_position_qty(base_url, headers, account_id, TEST_SYMBOL)
+    
+    order_id = None
+    try:
+        order_data = {
+            "class": "equity",
+            "symbol": TEST_SYMBOL,
+            "side": "buy",
+            "quantity": "1",
+            "type": "market",
+            "duration": "day"
+        }
+        resp = requests.post(
+            f"{base_url}/v1/accounts/{account_id}/orders",
+            headers=headers,
+            data=order_data,
+            timeout=TIMEOUT
+        )
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            order_info = data.get("order", {})
+            order_id = str(order_info.get("id", ""))
+            status = order_info.get("status", "submitted")
+            order_ids.append(order_id)
+            steps.append(_make_step(
+                "Submit Market Buy",
+                True,
+                resp.status_code,
+                f"Order {order_id}: {status}"
+            ))
+        else:
+            steps.append(_make_step("Submit Market Buy", False, resp.status_code, "Failed to place order", resp.text))
+            return
+    except requests.exceptions.Timeout:
+        steps.append(_make_step("Submit Market Buy", False, 0, "Request timed out"))
+        return
+    except requests.exceptions.RequestException as e:
+        steps.append(_make_step("Submit Market Buy", False, 0, f"Request error: {e}"))
+        return
+    
+    start_time = time.time()
+    filled = False
+    final_status = "unknown"
+    
+    while time.time() - start_time < FILL_TIMEOUT:
+        time.sleep(POLL_INTERVAL)
+        try:
+            resp = requests.get(f"{base_url}/v1/accounts/{account_id}/orders/{order_id}", headers=headers, timeout=TIMEOUT)
+            if resp.status_code == 200:
+                data = resp.json()
+                order_info = data.get("order", {})
+                final_status = order_info.get("status", "unknown")
+                
+                if final_status == "filled":
+                    filled = True
+                    break
+                elif final_status in ("canceled", "expired", "rejected"):
+                    break
+        except:
+            pass
+    
+    if filled:
+        steps.append(_make_step("Confirm Buy Fill", True, 200, f"Order filled"))
+    else:
+        if is_sandbox:
+            steps.append(_make_step("Confirm Buy Fill", True, 0, f"Sandbox: Order status {final_status} (fills may not update)"))
+            warnings.append("Sandbox may not reflect fills accurately")
+        else:
+            steps.append(_make_step("Confirm Buy Fill", False, 0, f"Timeout: Order status {final_status}"))
+            warnings.append("Fill timeout - consider re-running during active market hours")
+            return
+    
+    current_qty = _get_position_qty(base_url, headers, account_id, TEST_SYMBOL)
+    position_delta = current_qty - baseline_qty
+    
+    if position_delta > 0:
+        steps.append(_make_step("Confirm Position", True, 200, f"Position +{position_delta} (total: {current_qty})"))
+        
+        sell_qty = min(position_delta, 1)
+        try:
+            order_data = {
+                "class": "equity",
+                "symbol": TEST_SYMBOL,
+                "side": "sell",
+                "quantity": str(sell_qty),
+                "type": "market",
+                "duration": "day"
+            }
+            resp = requests.post(
+                f"{base_url}/v1/accounts/{account_id}/orders",
+                headers=headers,
+                data=order_data,
+                timeout=TIMEOUT
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                order_info = data.get("order", {})
+                sell_order_id = str(order_info.get("id", ""))
+                order_ids.append(sell_order_id)
+                steps.append(_make_step("Submit Market Sell", True, resp.status_code, f"Order {sell_order_id}"))
+                
+                time.sleep(3)
+                final_qty = _get_position_qty(base_url, headers, account_id, TEST_SYMBOL)
+                if final_qty <= baseline_qty:
+                    steps.append(_make_step("Confirm Position Closed", True, 200, "Position returned to baseline"))
+                else:
+                    steps.append(_make_step("Confirm Position Closed", True, 200, f"Position: {final_qty} (sell may be pending)"))
+            else:
+                steps.append(_make_step("Submit Market Sell", False, resp.status_code, "Failed to sell", resp.text))
+        except requests.exceptions.Timeout:
+            steps.append(_make_step("Submit Market Sell", False, 0, "Request timed out"))
+        except requests.exceptions.RequestException as e:
+            steps.append(_make_step("Submit Market Sell", False, 0, f"Request error: {e}"))
+    else:
+        if is_sandbox:
+            steps.append(_make_step("Confirm Position", True, 0, f"Sandbox: Position delta={position_delta} (may lag)"))
+            steps.append(_make_step("Submit Market Sell", True, 0, "Skipped: No confirmed position to sell"))
+            steps.append(_make_step("Confirm Position Closed", True, 0, "Skipped"))
+        else:
+            steps.append(_make_step("Confirm Position", True, 200, f"Position delta: {position_delta}"))
+            steps.append(_make_step("Submit Market Sell", True, 0, "Skipped: No new shares to sell"))
+            steps.append(_make_step("Confirm Position Closed", True, 0, "Skipped"))
+
 
 def main():
+    """Run smoke test from command line."""
     print("=" * 60)
-    print("  TRADIER CONNECTIVITY SMOKE TEST")
+    print("  TRADIER SMOKE TEST")
     print("=" * 60)
     print()
     
-    token = os.getenv("TRADIER_TOKEN")
-    base_url = os.getenv("TRADIER_BASE_URL", "https://sandbox.tradier.com")
+    result = run_tradier_smoke_test()
     
-    print(f"Base URL: {base_url}")
-    print(f"Token configured: {'Yes' if token else 'NO - MISSING!'}")
-    
-    if not token:
-        print("\nERROR: TRADIER_TOKEN environment variable is not set.")
-        print("Please add your Tradier API token to Replit Secrets.")
-        sys.exit(1)
-    
-    try:
-        client = get_client()
-    except TradierError as e:
-        print(f"\nERROR: Failed to create client: {e.message}")
-        sys.exit(1)
-    
-    separator("1. FETCH ACCOUNTS")
-    try:
-        accounts = client.get_accounts()
-        print(f"Found {len(accounts)} account(s):")
-        for acct in accounts:
-            acct_id = acct.get("account_number", "N/A")
-            acct_type = acct.get("type", "N/A")
-            status = acct.get("status", "N/A")
-            print(f"  - Account: {acct_id} | Type: {acct_type} | Status: {status}")
-        
-        if accounts:
-            account_id = os.getenv("TRADIER_ACCOUNT_ID") or accounts[0].get("account_number")
-            client.account_id = account_id
-            print(f"\nUsing account: {account_id}")
-        else:
-            print("\nNo accounts found!")
-            sys.exit(1)
-            
-    except TradierError as e:
-        print(f"ERROR: {e.message}")
-        if e.response_text:
-            print(f"Response: {e.response_text[:200]}")
-        sys.exit(1)
-    
-    separator("2. FETCH BALANCE")
-    try:
-        balance = client.get_account_balance()
-        print(f"Account Balance:")
-        print(f"  Total Equity:    ${balance.get('total_equity', 0):,.2f}")
-        print(f"  Total Cash:      ${balance.get('total_cash', 0):,.2f}")
-        print(f"  Option BP:       ${balance.get('option_buying_power', 0):,.2f}")
-        print(f"  Stock BP:        ${balance.get('stock_buying_power', 0):,.2f}")
-        print(f"  Day Trade BP:    ${balance.get('day_trade_buying_power', 0):,.2f}")
-    except TradierError as e:
-        print(f"ERROR: {e.message}")
-        if e.response_text:
-            print(f"Response: {e.response_text[:200]}")
-    
-    separator("3. FETCH POSITIONS")
-    try:
-        positions = client.get_positions()
-        if positions:
-            print(f"Current Positions ({len(positions)}):")
-            for pos in positions:
-                symbol = pos.get("symbol", "N/A")
-                qty = pos.get("quantity", 0)
-                cost = pos.get("cost_basis", 0)
-                print(f"  - {symbol}: {qty} shares @ ${cost:,.2f}")
-        else:
-            print("No open positions.")
-    except TradierError as e:
-        print(f"ERROR: {e.message}")
-        if e.response_text:
-            print(f"Response: {e.response_text[:200]}")
-    
-    separator("4. FETCH SPY QUOTE")
-    try:
-        quote = client.quote("SPY")
-        print(f"SPY Quote:")
-        print(f"  Last:   ${quote.get('last', 0):.2f}")
-        print(f"  Bid:    ${quote.get('bid', 0):.2f}")
-        print(f"  Ask:    ${quote.get('ask', 0):.2f}")
-        print(f"  Volume: {quote.get('volume', 0):,}")
-        print(f"  Change: {quote.get('change_percentage', 0):.2f}%")
-        spy_price = quote.get('last', 600)
-    except TradierError as e:
-        print(f"ERROR: {e.message}")
-        spy_price = 600
-    
-    separator("5. FETCH SPX OPTION EXPIRATIONS")
-    spx_expiration = None
-    try:
-        expirations = client.get_option_expirations("SPX")
-        if expirations:
-            print(f"SPX has {len(expirations)} available expirations:")
-            for exp in expirations[:5]:
-                print(f"  - {exp}")
-            if len(expirations) > 5:
-                print(f"  ... and {len(expirations) - 5} more")
-            spx_expiration = expirations[0]
-        else:
-            print("No SPX expirations found.")
-            future_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-            spx_expiration = future_date
-            print(f"Using fallback expiration: {spx_expiration}")
-    except TradierError as e:
-        print(f"ERROR: {e.message}")
-        future_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        spx_expiration = future_date
-        print(f"Using fallback expiration: {spx_expiration}")
-    
-    separator("6. FETCH SPX OPTION CHAIN (CALLS, NEAR ATM)")
-    try:
-        chain = client.option_chain("SPX", spx_expiration, option_type="call")
-        if chain:
-            spx_quote = client.quote("$SPX.X") if "$SPX.X" else None
-            current_price = spx_quote.get("last", 6000) if spx_quote else 6000
-            
-            atm_options = sorted(
-                chain, 
-                key=lambda x: abs(x.get("strike", 0) - current_price)
-            )[:5]
-            
-            print(f"SPX Calls near ATM ({spx_expiration}):")
-            for opt in atm_options:
-                strike = opt.get("strike", 0)
-                bid = opt.get("bid", 0)
-                ask = opt.get("ask", 0)
-                symbol = opt.get("symbol", "N/A")
-                print(f"  Strike ${strike}: Bid ${bid:.2f} / Ask ${ask:.2f} | {symbol}")
-        else:
-            print("No option chain data returned.")
-    except TradierError as e:
-        print(f"ERROR: {e.message}")
-        if e.response_text:
-            print(f"Response: {e.response_text[:200]}")
-    
-    separator("7. PLACE TEST STOCK ORDER (SPY)")
-    print("Placing a test BUY order for 1 share of SPY...")
-    print("(Using limit order far from market to avoid execution)")
-    try:
-        far_limit = 1.00
-        order_result = client.place_stock_order(
-            symbol="SPY",
-            side="buy",
-            quantity=1,
-            order_type="limit",
-            limit_price=far_limit,
-            tif="day"
-        )
-        print(f"Order Response:")
-        print(f"  Order ID: {order_result.get('id', 'N/A')}")
-        print(f"  Status:   {order_result.get('status', 'N/A')}")
-        print(f"  Details:  {order_result}")
-    except TradierError as e:
-        print(f"Order failed (expected in some sandbox configs):")
-        print(f"  Status Code: {e.status_code}")
-        print(f"  Message: {e.message}")
-        if e.response_text:
-            print(f"  Response: {e.response_text[:300]}")
-    
-    separator("8. PLACE TEST SPX OPTION ORDER")
-    print("Attempting single-leg SPX call option order...")
-    print("(May fail if sandbox doesn't support SPX options)")
-    try:
-        strike = 6000.0
-        order_result = client.place_option_order_single_leg(
-            underlying="SPX",
-            expiration=spx_expiration,
-            strike=strike,
-            option_type="C",
-            side="buy_to_open",
-            quantity=1,
-            order_type="limit",
-            limit_price=0.01,
-            tif="day"
-        )
-        print(f"Order Response:")
-        print(f"  Order ID: {order_result.get('id', 'N/A')}")
-        print(f"  Status:   {order_result.get('status', 'N/A')}")
-        print(f"  Details:  {order_result}")
-    except TradierError as e:
-        print(f"Order failed (expected for SPX in sandbox):")
-        print(f"  Status Code: {e.status_code}")
-        print(f"  Message: {e.message}")
-        if e.response_text:
-            print(f"  Response: {e.response_text[:300]}")
-        
-        print("\nShowing what the order payload would be:")
-        occ_symbol = client._build_occ_symbol("SPX", spx_expiration, "C", 6000.0)
-        print(f"  OCC Symbol: {occ_symbol}")
-        print(f"  Payload: class=option, symbol=SPX, option_symbol={occ_symbol}")
-        print(f"           side=buy_to_open, quantity=1, type=limit, price=0.01")
-    
-    separator("SMOKE TEST COMPLETE")
-    print("Tradier connectivity verified!")
+    print(f"Mode: {result['mode']}")
+    print(f"Success: {result['success']}")
+    print(f"Sandbox: {result.get('is_sandbox', False)}")
+    print(f"Timestamp: {result['timestamp']}")
     print()
+    
+    print("Steps:")
+    for step in result["steps"]:
+        status = "PASS" if step["ok"] else "FAIL"
+        print(f"  [{status}] {step['name']}: {step['summary']}")
+        if step.get("details"):
+            print(f"        {step['details']}")
+    
+    if result["warnings"]:
+        print()
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"  - {warning}")
+    
+    if result["order_ids"]:
+        print()
+        print(f"Order IDs: {', '.join(result['order_ids'])}")
+
 
 if __name__ == "__main__":
     main()

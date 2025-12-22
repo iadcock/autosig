@@ -18,6 +18,7 @@ from broker_health_checks import alpaca_health_check, tradier_health_check
 from report_docx import generate_report
 from broker_smoke_tests import alpaca_smoke_test, tradier_smoke_test
 from env_loader import diagnose_env
+from market_session import get_market_session_status, get_smoke_test_mode
 from signal_to_intent import build_trade_intent, classify_signal_type, resolve_exit_to_trade_intent, has_complete_leg_details
 from execution_plan import build_execution_plan, log_execution_plan, get_latest_signal_entry, get_executable_signal
 from execution.router import execute_trade
@@ -1991,12 +1992,51 @@ def set_mode():
 
 @app.route("/mode", methods=["GET"])
 @login_required
-def get_mode():
+def get_current_mode():
     """Get current execution mode info."""
     from mode_manager import get_effective_execution_mode
     
     mode_info = get_effective_execution_mode()
     return jsonify(mode_info)
+
+
+@app.route("/market/session", methods=["GET"])
+@login_required
+def market_session():
+    """Get current market session status for smoke test mode selection."""
+    session_status = get_market_session_status()
+    session_status["smoke_test_mode"] = get_smoke_test_mode()
+    return jsonify(session_status)
+
+
+@app.route("/smoke/alpaca", methods=["POST"])
+@login_required
+def smoke_alpaca():
+    """Run Alpaca smoke test with automatic mode selection."""
+    from alpaca_smoke_test import run_alpaca_smoke_test
+    
+    result = run_alpaca_smoke_test()
+    
+    status = "ok" if result["success"] else "fail"
+    summary = f"{result['mode']} mode - {'PASS' if result['success'] else 'FAIL'}"
+    update_service_status("alpaca", status, summary)
+    
+    return jsonify(result)
+
+
+@app.route("/smoke/tradier", methods=["POST"])
+@login_required
+def smoke_tradier():
+    """Run Tradier smoke test with automatic mode selection."""
+    from tradier_smoketest import run_tradier_smoke_test
+    
+    result = run_tradier_smoke_test()
+    
+    status = "ok" if result["success"] else "fail"
+    summary = f"{result['mode']} mode - {'PASS' if result['success'] else 'FAIL'}"
+    update_service_status("tradier", status, summary)
+    
+    return jsonify(result)
 
 
 if __name__ == "__main__":

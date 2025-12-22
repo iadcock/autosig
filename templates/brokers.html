@@ -3,6 +3,27 @@
 
 {% block content %}
 <div class="card">
+    <h3 class="card-title">Market Session</h3>
+    <p class="text-muted mb-2">Current market status determines smoke test mode.</p>
+    
+    <div class="stat-row" style="display: flex; gap: 20px; align-items: center;">
+        <div class="stat-box" style="max-width: 200px;">
+            <div class="stat-value" id="market-status">--</div>
+            <div class="stat-label">Market Status</div>
+        </div>
+        <div class="stat-box" style="max-width: 200px;">
+            <div class="stat-value" id="smoke-mode">--</div>
+            <div class="stat-label">Smoke Test Mode</div>
+        </div>
+    </div>
+    
+    <p class="text-muted mt-2" id="mode-help" style="font-size: 0.9em;">
+        <strong>FILL mode</strong>: Tests real order fills during market hours.<br>
+        <strong>NO-FILL mode</strong>: Tests order placement and cancellation when market is closed.
+    </p>
+</div>
+
+<div class="card">
     <h3 class="card-title">Whop Alerts</h3>
     <p class="text-muted mb-2">Test connectivity to Whop alerts feed and verify authentication.</p>
     
@@ -25,7 +46,7 @@
                 Health Check
             </button>
             <button id="btn-alpaca-smoke" class="btn btn-sm btn-secondary" onclick="runSmokeTest('alpaca')">
-                Full Smoke Test
+                Run Smoke Test
             </button>
         </div>
         
@@ -41,7 +62,7 @@
                 Health Check
             </button>
             <button id="btn-tradier-smoke" class="btn btn-sm btn-secondary" onclick="runSmokeTest('tradier')">
-                Full Smoke Test
+                Run Smoke Test
             </button>
         </div>
         
@@ -75,6 +96,37 @@
 
 {% block scripts %}
 <script>
+async function loadMarketSession() {
+    try {
+        const data = await fetchJSON('/market/session');
+        
+        const marketStatus = document.getElementById('market-status');
+        const smokeMode = document.getElementById('smoke-mode');
+        
+        if (data.is_open) {
+            marketStatus.textContent = 'OPEN';
+            marketStatus.className = 'stat-value result-ok';
+        } else {
+            marketStatus.textContent = 'CLOSED';
+            marketStatus.className = 'stat-value result-warn';
+        }
+        
+        const mode = data.smoke_test_mode || 'UNKNOWN';
+        smokeMode.textContent = mode;
+        if (mode === 'FILL') {
+            smokeMode.className = 'stat-value result-ok';
+        } else if (mode === 'NO_FILL') {
+            smokeMode.className = 'stat-value result-warn';
+        } else {
+            smokeMode.className = 'stat-value';
+        }
+    } catch (error) {
+        console.error('Failed to load market session:', error);
+        document.getElementById('market-status').textContent = 'ERROR';
+        document.getElementById('smoke-mode').textContent = 'UNKNOWN';
+    }
+}
+
 async function loadMirrorStatus() {
     try {
         const config = await fetchJSON('/config');
@@ -118,14 +170,30 @@ async function runSmokeTest(broker) {
     results.innerHTML = '<p class="text-muted">Running smoke test (may take 30+ seconds)...</p>';
     
     try {
-        const data = await postJSON(`/test/${broker}`, {});
-        results.innerHTML = buildResultsTable(data.steps || []);
+        const data = await postJSON(`/smoke/${broker}`, {});
+        
+        let modeLabel = '';
+        if (data.mode) {
+            modeLabel = `<div class="smoke-mode-badge ${data.mode === 'FILL' ? 'mode-fill' : 'mode-nofill'}">${data.mode} MODE</div>`;
+        }
+        
+        let warningsHtml = '';
+        if (data.warnings && data.warnings.length > 0) {
+            warningsHtml = '<div class="smoke-warnings"><strong>Warnings:</strong><ul>';
+            for (const warning of data.warnings) {
+                warningsHtml += `<li>${escapeHtml(warning)}</li>`;
+            }
+            warningsHtml += '</ul></div>';
+        }
+        
+        results.innerHTML = modeLabel + buildResultsTable(data.steps || []) + warningsHtml;
         
         if (data.success) {
-            showSuccess(btn, 'Passed!');
+            showSuccess(btn, `Passed (${data.mode})`);
         } else {
-            showError(btn, 'Failed');
+            showError(btn, `Failed (${data.mode})`);
         }
+        refreshStatusRow();
     } catch (error) {
         results.innerHTML = '<p class="result-fail">Smoke test failed</p>';
         showError(btn, 'Error');
@@ -158,6 +226,37 @@ async function checkEnvDebug() {
     }
 }
 
+loadMarketSession();
 loadMirrorStatus();
 </script>
+
+<style>
+.smoke-mode-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.85em;
+    margin-bottom: 10px;
+}
+.mode-fill {
+    background-color: #d4edda;
+    color: #155724;
+}
+.mode-nofill {
+    background-color: #fff3cd;
+    color: #856404;
+}
+.smoke-warnings {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #fff3cd;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+.smoke-warnings ul {
+    margin: 5px 0 0 20px;
+    padding: 0;
+}
+</style>
 {% endblock %}
