@@ -1,5 +1,12 @@
 # Options Trading Bot Project
 
+## TEMPORARY TESTING STATE (December 2024)
+The following temporary modifications are active for testing purposes:
+- **Risk Mode LOCKED to AGGRESSIVE** - Conservative/Balanced modes are bypassed
+- **Auto Mode ON by default** - `_auto_enabled = True` in `auto_mode.py`
+- Modified files: `settings_store.py`, `preflight.py`, `strategy_rules.py`, `mode_manager.py`, `auto_mode.py`
+- To revert: Remove `FORCED_RISK_MODE` constant and restore original logic in above files
+
 ## Overview
 This project is an automated options trading bot designed to process trade alerts from Whop and execute paper trades via the Alpaca API. Its primary purpose is educational, with paper trading as the default and highly emphasized mode. The bot features comprehensive risk management, a review queue for signals, and a Flask-based dashboard for monitoring and interaction. It supports various option strategies, including debit/credit spreads and single-leg options, with the capability for future expansion to live trading with the Tradier API. The project aims to provide a safe, controlled environment for learning automated trading strategies, emphasizing transparency, configurability, and robust error handling.
 
