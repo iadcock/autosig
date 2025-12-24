@@ -1322,7 +1322,8 @@ def execute_paper_last_signal():
             source_post_id="none",
             action="SKIP",
             reason=skip_reason,
-            signal_type=signal_type
+            signal_type=signal_type,
+            parsed_signal=None
         )
         log_execution_plan(execution_plan)
         
@@ -1358,7 +1359,8 @@ def execute_paper_last_signal():
                         source_post_id=post_id,
                         action="SKIP",
                         reason=error or "Could not resolve EXIT to open position",
-                        signal_type=signal_type
+                        signal_type=signal_type,
+                        parsed_signal=parsed_signal
                     )
                     log_execution_plan(execution_plan)
                     
@@ -1387,7 +1389,8 @@ def execute_paper_last_signal():
             source_post_id=post_id,
             action="PLACE_ORDER",
             signal_type=signal_type,
-            matched_position_id=matched_position_id
+            matched_position_id=matched_position_id,
+            parsed_signal=parsed_signal
         )
         log_execution_plan(execution_plan)
         
@@ -1598,7 +1601,8 @@ def approve_signal():
             source_post_id=post_id,
             action="PLACE_ORDER",
             signal_type=entry.get("signal_type", "UNKNOWN"),
-            matched_position_id=matched_position_id
+            matched_position_id=matched_position_id,
+            parsed_signal=entry.get("parsed_signal")
         )
         log_execution_plan(execution_plan)
         

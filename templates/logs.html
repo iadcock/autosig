@@ -20,6 +20,8 @@
     </div>
 </div>
 
+<div id="signal-popover" class="signal-popover" style="display: none;"></div>
+
 <div class="card">
     <h3 class="card-title">Report Generation</h3>
     <div class="btn-row">
@@ -32,6 +34,86 @@
 
 {% block scripts %}
 <script>
+let cachedLogs = [];
+
+function formatLogTimestamp(log) {
+    const ts = log.ts_utc || log.ts_iso || log.timestamp;
+    if (!ts) return 'Unknown';
+    
+    try {
+        const date = new Date(ts);
+        if (isNaN(date.getTime())) return 'Unknown';
+        
+        const options = {
+            weekday: 'short',
+            month: 'numeric',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: 'America/Los_Angeles'
+        };
+        return date.toLocaleString('en-US', options) + ' PT';
+    } catch (e) {
+        return 'Unknown';
+    }
+}
+
+function getLogTicker(log) {
+    if (log.parsed_summary && log.parsed_summary.ticker) {
+        return log.parsed_summary.ticker;
+    }
+    if (log.order_preview && log.order_preview.underlying) {
+        return log.order_preview.underlying;
+    }
+    return log.ticker || log.underlying || '-';
+}
+
+function buildPopoverContent(log) {
+    const ps = log.parsed_summary;
+    if (!ps) return '<p class="text-muted">No parsed signal available.</p>';
+    
+    let html = '<h4>Signal Details</h4>';
+    
+    if (ps.ticker) {
+        html += `<div class="signal-popover-row"><span class="signal-popover-label">Ticker</span><span class="signal-popover-value">${escapeHtml(ps.ticker)}</span></div>`;
+    }
+    if (ps.strategy) {
+        html += `<div class="signal-popover-row"><span class="signal-popover-label">Strategy</span><span class="signal-popover-value">${escapeHtml(ps.strategy)}</span></div>`;
+    }
+    if (ps.expiration) {
+        html += `<div class="signal-popover-row"><span class="signal-popover-label">Expiration</span><span class="signal-popover-value">${escapeHtml(ps.expiration)}</span></div>`;
+    }
+    if (ps.legs && ps.legs.length > 0) {
+        html += `<div class="signal-popover-row"><span class="signal-popover-label">Legs</span><span class="signal-popover-value">${escapeHtml(ps.legs.join(', '))}</span></div>`;
+    }
+    if (ps.limit) {
+        html += `<div class="signal-popover-row"><span class="signal-popover-label">Limit</span><span class="signal-popover-value">${escapeHtml(ps.limit)}</span></div>`;
+    }
+    if (ps.size_pct != null) {
+        html += `<div class="signal-popover-row"><span class="signal-popover-label">Size</span><span class="signal-popover-value">${ps.size_pct}%</span></div>`;
+    }
+    
+    return html;
+}
+
+function showSignalPopover(event, logIdx) {
+    const log = cachedLogs[logIdx];
+    if (!log) return;
+    
+    const popover = document.getElementById('signal-popover');
+    popover.innerHTML = buildPopoverContent(log);
+    popover.style.display = 'block';
+    
+    const rect = event.target.getBoundingClientRect();
+    popover.style.top = (rect.bottom + window.scrollY + 5) + 'px';
+    popover.style.left = Math.min(rect.left + window.scrollX, window.innerWidth - 340) + 'px';
+}
+
+function hideSignalPopover() {
+    document.getElementById('signal-popover').style.display = 'none';
+}
+
 async function loadLogs() {
     const container = document.getElementById('logs-container');
     const filter = document.getElementById('filter-type').value;
@@ -41,9 +123,10 @@ async function loadLogs() {
     try {
         const data = await fetchJSON('/api/logs?limit=50');
         let logs = data.logs || [];
+        cachedLogs = logs;
         
         if (filter === 'executed') {
-            logs = logs.filter(l => l.action === 'EXECUTE' || l.action === 'PAPER' || l.action === 'LIVE');
+            logs = logs.filter(l => l.action === 'EXECUTE' || l.action === 'PAPER' || l.action === 'LIVE' || l.action === 'PLACE_ORDER');
         } else if (filter === 'skipped') {
             logs = logs.filter(l => l.action === 'SKIP');
         }
@@ -60,22 +143,31 @@ async function loadLogs() {
                         <th>Time</th>
                         <th>Action</th>
                         <th>Ticker</th>
-                        <th>Reason/Details</th>
+                        <th>Details</th>
                     </tr>
                 </thead>
                 <tbody>
         `;
         
-        for (const log of logs) {
+        for (let i = 0; i < logs.length; i++) {
+            const log = logs[i];
+            const origIdx = cachedLogs.indexOf(log);
             const actionClass = log.action === 'SKIP' ? 'result-warn' : 
-                               (log.action === 'EXECUTE' || log.action === 'PAPER') ? 'result-ok' : '';
+                               (log.action === 'EXECUTE' || log.action === 'PAPER' || log.action === 'PLACE_ORDER') ? 'result-ok' : '';
+            
+            const ticker = getLogTicker(log);
+            const reason = log.reason || log.message || (log.result ? log.result.message : null) || '-';
+            const hasSignal = log.parsed_summary != null;
             
             html += `
                 <tr>
-                    <td>${formatTimestamp(log.timestamp)}</td>
+                    <td title="${escapeHtml(log.ts_utc || '')}">${formatLogTimestamp(log)}</td>
                     <td class="${actionClass}">${escapeHtml(log.action || '-')}</td>
-                    <td>${escapeHtml(log.ticker || log.underlying || '-')}</td>
-                    <td>${escapeHtml(truncate(log.reason || log.message || '-', 80))}</td>
+                    <td>
+                        ${escapeHtml(ticker)}
+                        ${hasSignal ? `<span class="signal-info-icon" onmouseenter="showSignalPopover(event, ${origIdx})" onmouseleave="hideSignalPopover()">ℹ</span>` : ''}
+                    </td>
+                    <td>${escapeHtml(truncate(reason, 80))}</td>
                 </tr>
             `;
         }

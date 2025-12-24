@@ -1,0 +1,166 @@
+TEMPORARY TESTING CHANGE + LOGGING CLEANUP
+
+GOAL:
+1) Lock the system to AGGRESSIVE risk behavior only (remove all Conservative/Balanced logic).
+2) Fix Execution History logs so they:
+   - always include timestamps
+   - never show misleading risk mode messages
+   - include a clean hover popup for parsed signals
+
+This is a temporary testing state. Risk modes will be reintroduced later.
+
+────────────────────────────────────────
+A) FORCE AGGRESSIVE MODE (Backend)
+────────────────────────────────────────
+
+1) Remove all branching on risk_mode.
+Everywhere risk_mode is read (preflight, filters, execution guards):
+
+- Ignore stored or UI-selected risk_mode
+- Force:
+
+risk_mode_effective = "AGGRESSIVE"
+
+Example:
+
+risk_mode_requested = settings.get("risk_mode")
+risk_mode_effective = "AGGRESSIVE"
+
+ALL checks must reference risk_mode_effective only.
+
+2) Disable ALL Conservative/Balanced-only skips.
+
+REMOVE or bypass logic that:
+- blocks long positions
+- blocks debit trades
+- blocks credit spreads
+- blocks PUT_CREDIT_SPREAD / PUT_DEBIT_SPREAD
+- applies conservative trade caps
+
+AGGRESSIVE behavior allows:
+- long calls & puts
+- debit + credit spreads
+- SPX strategies (respect existing ODTE toggle if present)
+
+────────────────────────────────────────
+B) SETTINGS + UI CLEANUP
+────────────────────────────────────────
+
+1) Settings schema:
+- Hardcode risk_mode = "AGGRESSIVE"
+- Ignore POST attempts to change risk mode
+
+settings.json must always resolve to:
+{
+  "risk_mode": "AGGRESSIVE"
+}
+
+2) Settings UI:
+- Remove Risk Mode dropdown entirely
+- Replace with static label:
+
+Risk Mode: AGGRESSIVE (locked for testing)
+
+Add helper text:
+“This is temporarily locked during execution testing.”
+
+3) Header / Status Row:
+- Always show AGGRESSIVE
+- Do not infer from settings or cached values
+
+────────────────────────────────────────
+C) EXECUTION LOG TIMESTAMPS
+────────────────────────────────────────
+
+Every execution log entry MUST include:
+
+- ts_utc: ISO timestamp (UTC)
+- tz: "America/Los_Angeles"
+- ts_local (optional, or compute in UI)
+
+Example:
+{
+  "ts_utc": "2025-12-23T00:42:18.392Z",
+  "action": "SKIP",
+  "reason": "...",
+  ...
+}
+
+If old log entries lack timestamps:
+- display “Unknown” or derive from file modified time
+- ALL new entries must include timestamps
+
+UI:
+- Render as: Tue 12/23 4:42 PM PT
+- Tooltip shows raw ISO UTC
+
+────────────────────────────────────────
+D) FIX RISK MODE CONFUSION IN LOGS
+────────────────────────────────────────
+
+Each log entry must store a settings snapshot AT TIME OF DECISION:
+
+Include:
+- risk_mode_requested
+- risk_mode_effective (always "AGGRESSIVE" for now)
+- execution_mode_requested (paper/live/dual)
+- execution_mode_effective
+- live_armed (LIVE_TRADING && !DRY_RUN)
+- auto_mode_enabled
+
+REMOVE messages like:
+“Long positions disabled in CONSERVATIVE mode”
+
+These should never appear while this change is active.
+
+────────────────────────────────────────
+E) PARSED SIGNAL HOVER POPUP (CLEAN)
+────────────────────────────────────────
+
+Each log entry should store a minimal parsed signal summary:
+
+parsed_summary = {
+  "ticker": "SPX",
+  "strategy": "PUT_CREDIT_SPREAD",
+  "expiration": "2025-12-19",
+  "legs": ["-1 4800P", "+1 4750P"],
+  "limit": "2.60–2.70 credit",
+  "size_pct": 1
+}
+
+DO NOT store:
+- raw HTML
+- full JSON blobs
+- broker payloads
+
+UI:
+- Add a small 🛈 icon per log row
+- On hover (or tap), show a compact popover with:
+  • Ticker
+  • Strategy
+  • Expiration
+  • Legs
+  • Limit
+  • Size
+
+Constraints:
+- max width ~320px
+- no scroll unless necessary
+- clean formatting, no clutter
+
+If parsed_summary is missing:
+- show “No parsed signal available.”
+
+────────────────────────────────────────
+F) ACCEPTANCE CRITERIA
+────────────────────────────────────────
+
+1) No logs reference CONSERVATIVE or BALANCED.
+2) No trade is skipped due to long/debit restrictions.
+3) Execution History shows real timestamps instead of “-”.
+4) Header + logs consistently show AGGRESSIVE.
+5) Hover popup shows clean parsed signal summary.
+6) UI remains uncluttered and readable.
+7) Changes are isolated and reversible later.
+
+IMPLEMENT THIS AS A TEMPORARY TESTING STATE.

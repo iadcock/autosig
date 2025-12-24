@@ -232,15 +232,13 @@ def get_effective_behavior_summary() -> Dict[str, Any]:
     mode_info = get_effective_execution_mode()
     settings = load_settings()
     
-    risk_mode = settings.get("RISK_MODE", "balanced")
-    if risk_mode not in VALID_RISK_MODES:
-        risk_mode = "balanced"
+    risk_mode = "aggressive"
     
     effective_mode = mode_info["effective"]
     paper_mirror = settings.get("PAPER_MIRROR_ENABLED", False)
     allow_0dte_requested = settings.get("ALLOW_0DTE_SPX", False)
     
-    allow_0dte_effective = allow_0dte_requested and risk_mode == "aggressive"
+    allow_0dte_effective = allow_0dte_requested
     
     live_trading_active = effective_mode in ("live", "dual")
     
@@ -257,15 +255,8 @@ def get_effective_behavior_summary() -> Dict[str, Any]:
     else:
         summary_parts.append(f"DUAL mode - live on {mode_info['primary_broker'].upper()} with paper mirror.")
     
-    if risk_mode == "conservative":
-        summary_parts.append("Conservative risk: spreads only, 1% max per trade.")
-    elif risk_mode == "balanced":
-        summary_parts.append("Balanced risk: stocks + options, 2% max per trade.")
-    else:
-        summary_parts.append("Aggressive risk: all trades allowed, 5% max per trade.")
+    summary_parts.append("AGGRESSIVE risk mode (locked for testing): all trades allowed, 5% max per trade.")
     
-    if allow_0dte_requested and not allow_0dte_effective:
-        warnings.append("0DTE SPX is disabled because Risk Mode is not Aggressive.")
     
     if live_trading_active:
         warnings.append("LIVE TRADING IS ACTIVE - Real money trades will execute!")
@@ -313,17 +304,7 @@ def validate_settings_safety(proposed_settings: Dict[str, Any]) -> Dict[str, Any
     forced_changes = {}
     validated = dict(proposed_settings)
     
-    risk_mode = str(validated.get("RISK_MODE", "balanced")).lower()
-    if risk_mode not in ("conservative", "balanced", "aggressive"):
-        risk_mode = "balanced"
-        validated["RISK_MODE"] = risk_mode
-        forced_changes["RISK_MODE"] = risk_mode
-    
-    allow_0dte = validated.get("ALLOW_0DTE_SPX", False)
-    if allow_0dte and risk_mode != "aggressive":
-        validated["ALLOW_0DTE_SPX"] = False
-        forced_changes["ALLOW_0DTE_SPX"] = False
-        warnings.append(f"0DTE SPX disabled: only allowed in Aggressive risk mode (current: {risk_mode.title()}).")
+    validated["RISK_MODE"] = "aggressive"
     
     exec_mode = str(validated.get("REQUESTED_EXECUTION_MODE", "paper")).lower()
     live_allowed = is_live_allowed()

@@ -15,15 +15,17 @@ DEFAULT_SETTINGS = {
     "PAPER_MIRROR_ENABLED": False,
     "AUTO_POLL_SECONDS": 30,
     "AUTO_WINDOW_BUFFER_MINUTES": 60,
-    "MAX_RISK_PCT_PER_TRADE": 2,
+    "MAX_RISK_PCT_PER_TRADE": 5,
     "MAX_DAILY_RISK_PCT": 10,
     "MAX_OPEN_POSITIONS": 20,
     "ALLOW_0DTE_SPX": False,
     "AUTO_MAX_TRADES_PER_DAY": 10,
-    "AUTO_MAX_TRADES_PER_HOUR": 3,
-    "RISK_MODE": "balanced",
+    "AUTO_MAX_TRADES_PER_HOUR": 5,
+    "RISK_MODE": "aggressive",
     "REQUESTED_EXECUTION_MODE": "paper",
 }
+
+FORCED_RISK_MODE = "aggressive"
 
 VALID_RISK_MODES = ("conservative", "balanced", "aggressive")
 VALID_EXECUTION_MODES = ("paper", "live", "dual")
@@ -74,6 +76,8 @@ def load_settings() -> Dict[str, Any]:
     1. Persisted file (data/settings.json)
     2. Environment variables
     3. Default values
+    
+    NOTE: RISK_MODE is force-locked to AGGRESSIVE during testing.
     """
     global _settings_cache
     
@@ -85,6 +89,8 @@ def load_settings() -> Dict[str, Any]:
             settings[key] = file_settings[key]
         else:
             settings[key] = _get_env_value(key, default)
+    
+    settings["RISK_MODE"] = FORCED_RISK_MODE
     
     _settings_cache = settings
     return settings
@@ -113,11 +119,7 @@ def save_settings(settings: Dict[str, Any]) -> bool:
                 except (ValueError, TypeError):
                     validated[key] = default
             elif key == "RISK_MODE":
-                val_str = str(val).lower()
-                if val_str in VALID_RISK_MODES:
-                    validated[key] = val_str
-                else:
-                    validated[key] = default
+                validated[key] = FORCED_RISK_MODE
             elif key == "REQUESTED_EXECUTION_MODE":
                 val_str = str(val).lower()
                 if val_str in VALID_EXECUTION_MODES:

@@ -20,18 +20,16 @@ LIVE_TRADING = os.getenv("LIVE_TRADING", "false").lower() == "true"
 
 
 def _get_current_settings():
-    """Get current settings with risk mode applied."""
-    settings = load_settings()
-    risk_mode = settings.get("RISK_MODE", "balanced")
-    if risk_mode not in VALID_RISK_MODES:
-        risk_mode = "balanced"
+    """Get current settings with risk mode applied.
     
-    effective_caps = get_effective_caps(risk_mode, settings)
+    NOTE: TEMPORARILY LOCKED TO AGGRESSIVE for testing.
+    """
+    settings = load_settings()
     
     return {
-        "risk_mode": risk_mode,
-        "max_risk_pct": effective_caps.get("MAX_RISK_PCT_PER_TRADE", 2) / 100.0,
-        "max_trades_hour": effective_caps.get("AUTO_MAX_TRADES_PER_HOUR", 3),
+        "risk_mode": "aggressive",
+        "max_risk_pct": 0.05,
+        "max_trades_hour": 5,
         "allow_0dte_spx": settings.get("ALLOW_0DTE_SPX", False),
         "max_daily_risk_pct": settings.get("MAX_DAILY_RISK_PCT", 10) / 100.0,
         "max_open_positions": settings.get("MAX_OPEN_POSITIONS", 20),
@@ -230,42 +228,13 @@ def check_risk_mode(parsed_signal: dict, trade_intent: dict, settings: dict, che
     """
     Check if current risk mode allows this trade.
     
-    EXIT signals are always allowed regardless of risk mode.
-    This ensures we can always close positions to reduce risk.
+    NOTE: TEMPORARILY LOCKED TO AGGRESSIVE - all trades allowed.
     """
-    metadata = trade_intent.get("metadata", {})
-    signal_type = metadata.get("signal_type", "")
-    
-    if signal_type == "EXIT":
-        checks.append({
-            "name": "risk_mode",
-            "ok": True,
-            "summary": "EXIT signal - always allowed regardless of risk mode"
-        })
-        return
-    
-    risk_mode = settings.get("risk_mode", "balanced")
-    allow_0dte = settings.get("allow_0dte_spx", False)
-    
-    if risk_mode != "aggressive":
-        allow_0dte = False
-    
-    allowed, block_reason = check_risk_mode_allows(
-        parsed_signal, trade_intent, risk_mode, allow_0dte
-    )
-    
-    if not allowed:
-        checks.append({
-            "name": "risk_mode",
-            "ok": False,
-            "summary": block_reason
-        })
-    else:
-        checks.append({
-            "name": "risk_mode",
-            "ok": True,
-            "summary": f"Risk mode ({risk_mode.upper()}) allows this trade"
-        })
+    checks.append({
+        "name": "risk_mode",
+        "ok": True,
+        "summary": "Risk mode: AGGRESSIVE (locked for testing) - all trades allowed"
+    })
 
 
 def check_risk_controls(parsed_signal: dict, trade_intent: dict, settings: dict, checks: list, warnings: list) -> None:

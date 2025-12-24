@@ -143,29 +143,16 @@ def check_risk_mode_allows(
     """
     Check if the current risk mode allows this trade.
     
+    NOTE: TEMPORARILY LOCKED TO AGGRESSIVE - all trades allowed.
+    Conservative/Balanced restrictions are bypassed.
+    
     Returns:
         (allowed, block_reason)
         - allowed: True if trade is allowed
         - block_reason: Reason for blocking, or None if allowed
     """
-    if is_exit_signal(parsed_signal, trade_intent):
-        return (True, None)
-    
-    if is_spx_0dte(trade_intent):
-        if risk_mode == "conservative":
-            return (False, "CONSERVATIVE mode blocks 0DTE SPX trades")
-        elif risk_mode == "balanced":
-            return (False, "BALANCED mode blocks 0DTE SPX trades")
-        elif risk_mode == "aggressive":
-            if not allow_0dte_spx:
-                return (False, "0DTE SPX requires ALLOW_0DTE_SPX=true in AGGRESSIVE mode")
-    
-    if risk_mode == "conservative":
-        if is_long_stock_entry(parsed_signal, trade_intent):
-            return (False, "CONSERVATIVE mode blocks long stock entries")
-        
-        if is_single_leg_option_entry(parsed_signal, trade_intent):
-            return (False, "CONSERVATIVE mode blocks single-leg options (undefined risk)")
+    if is_spx_0dte(trade_intent) and not allow_0dte_spx:
+        return (False, "0DTE SPX requires ALLOW_0DTE_SPX=true")
     
     return (True, None)
 
@@ -174,28 +161,14 @@ def get_effective_caps(risk_mode: RiskMode, current_settings: dict) -> dict:
     """
     Get effective risk caps based on risk mode.
     
-    Clamps user settings to not exceed mode maximums.
+    NOTE: TEMPORARILY LOCKED TO AGGRESSIVE for testing.
     """
-    mode_caps = RISK_MODE_CAPS.get(risk_mode, RISK_MODE_CAPS["balanced"])
-    
-    result = {}
-    
-    user_risk_pct = current_settings.get("MAX_RISK_PCT_PER_TRADE", 2)
-    max_risk_pct = mode_caps["MAX_RISK_PCT_PER_TRADE"]
-    result["MAX_RISK_PCT_PER_TRADE"] = min(user_risk_pct, max_risk_pct)
-    
-    user_trades_hour = current_settings.get("AUTO_MAX_TRADES_PER_HOUR", 3)
-    max_trades_hour = mode_caps["AUTO_MAX_TRADES_PER_HOUR"]
-    result["AUTO_MAX_TRADES_PER_HOUR"] = min(user_trades_hour, max_trades_hour)
-    
-    return result
+    return {
+        "MAX_RISK_PCT_PER_TRADE": 5,
+        "AUTO_MAX_TRADES_PER_HOUR": 5,
+    }
 
 
 def get_risk_mode_description(mode: RiskMode) -> str:
     """Get human-readable description of risk mode."""
-    descriptions = {
-        "conservative": "Spreads only, no 0DTE, 1% max risk, 1 trade/hour",
-        "balanced": "Stocks + options, no 0DTE, 2% max risk, 3 trades/hour",
-        "aggressive": "All trades, 0DTE with flag, 5% max risk, 5 trades/hour",
-    }
-    return descriptions.get(mode, "Unknown mode")
+    return "AGGRESSIVE (locked for testing) - All trades allowed, 5% max risk, 5 trades/hour"

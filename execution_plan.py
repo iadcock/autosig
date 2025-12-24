@@ -6,13 +6,66 @@ Logs execution plans to logs/execution_plan.jsonl for audit and analysis.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Literal, Dict, Any, List, Tuple
 
 from trade_intent import TradeIntent, ExecutionResult
 
 
 EXECUTION_PLAN_LOG = "logs/execution_plan.jsonl"
+
+
+def _get_settings_snapshot() -> Dict[str, Any]:
+    """Get a snapshot of current settings at time of decision."""
+    from settings_store import load_settings, FORCED_RISK_MODE
+    from mode_manager import get_effective_execution_mode, is_live_allowed
+    from auto_mode import get_auto_status
+    
+    settings = load_settings()
+    mode_info = get_effective_execution_mode()
+    auto_status = get_auto_status()
+    
+    live_armed = is_live_allowed()
+    
+    return {
+        "risk_mode_requested": settings.get("RISK_MODE", "aggressive"),
+        "risk_mode_effective": "aggressive",
+        "execution_mode_requested": mode_info["requested"],
+        "execution_mode_effective": mode_info["effective"],
+        "live_armed": live_armed,
+        "auto_mode_enabled": auto_status.get("enabled", False),
+    }
+
+
+def _build_parsed_summary(parsed_signal: Optional[dict]) -> Optional[Dict[str, Any]]:
+    """Build a minimal parsed signal summary for hover popup."""
+    if not parsed_signal:
+        return None
+    
+    legs = parsed_signal.get("legs", [])
+    leg_strs = []
+    for leg in legs:
+        side = leg.get("side", "")
+        strike = leg.get("strike", "")
+        option_type = leg.get("option_type", "")
+        qty = leg.get("quantity", 1)
+        sign = "+" if side == "BUY" else "-"
+        leg_strs.append(f"{sign}{qty} {strike}{option_type[0] if option_type else ''}")
+    
+    limit_str = None
+    if parsed_signal.get("limit_price"):
+        limit_str = f"${parsed_signal['limit_price']}"
+    elif parsed_signal.get("limit_min") and parsed_signal.get("limit_max"):
+        limit_str = f"${parsed_signal['limit_min']}-${parsed_signal['limit_max']}"
+    
+    return {
+        "ticker": parsed_signal.get("ticker", ""),
+        "strategy": parsed_signal.get("strategy", ""),
+        "expiration": parsed_signal.get("expiration", ""),
+        "legs": leg_strs if leg_strs else None,
+        "limit": limit_str,
+        "size_pct": parsed_signal.get("size_pct"),
+    }
 
 
 def build_execution_plan(
@@ -22,7 +75,8 @@ def build_execution_plan(
     action: Literal["PLACE_ORDER", "SKIP"] = "PLACE_ORDER",
     reason: Optional[str] = None,
     signal_type: Optional[str] = None,
-    matched_position_id: Optional[str] = None
+    matched_position_id: Optional[str] = None,
+    parsed_signal: Optional[dict] = None
 ) -> dict:
     """
     Build a loggable execution plan dictionary.
@@ -35,10 +89,13 @@ def build_execution_plan(
         reason: Reason for skipping (if action is SKIP)
         signal_type: ENTRY, EXIT, or UNKNOWN
         matched_position_id: Position ID if EXIT resolved from open position
+        parsed_signal: The original parsed signal dict (for summary)
         
     Returns:
         Dictionary ready for JSONL logging
     """
+    now_utc = datetime.now(timezone.utc)
+    
     intent_dict = None
     result_dict = None
     execution_mode = None
@@ -86,13 +143,17 @@ def build_execution_plan(
         }
     
     return {
-        "ts_iso": datetime.utcnow().isoformat() + "Z",
+        "ts_utc": now_utc.isoformat(),
+        "tz": "America/Los_Angeles",
+        "ts_iso": now_utc.isoformat(),
         "post_id": source_post_id,
         "signal_type": signal_type,
         "action": action,
         "reason": reason,
         "matched_position_id": matched_position_id,
         "execution_mode": execution_mode,
+        "settings_snapshot": _get_settings_snapshot(),
+        "parsed_summary": _build_parsed_summary(parsed_signal),
         "order_preview": intent_dict,
         "result": result_dict
     }

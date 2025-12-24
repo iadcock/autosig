@@ -775,3 +775,74 @@ input:checked + .toggle-slider:before {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+.locked-setting {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+    border-radius: 8px;
+    width: fit-content;
+}
+
+.locked-badge {
+    font-weight: 700;
+    color: white;
+    font-size: 14px;
+    letter-spacing: 1px;
+}
+
+.locked-label {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+    font-style: italic;
+}
+
+.signal-info-icon {
+    cursor: pointer;
+    color: #667eea;
+    font-size: 14px;
+    margin-left: 4px;
+}
+
+.signal-info-icon:hover {
+    color: #764ba2;
+}
+
+.signal-popover {
+    position: absolute;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    padding: 12px 16px;
+    max-width: 320px;
+    z-index: 1000;
+    font-size: 13px;
+}
+
+.signal-popover h4 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #333;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 6px;
+}
+
+.signal-popover-row {
+    display: flex;
+    justify-content: space-between;
+    margin: 4px 0;
+}
+
+.signal-popover-label {
+    color: #666;
+    font-weight: 500;
+}
+
+.signal-popover-value {
+    color: #333;
+    text-align: right;
+    max-width: 180px;
+}
