@@ -139,13 +139,46 @@ async function refreshStatusRow() {
         const data = await resp.json();
         
         updateServiceStatus('whop', data.whop);
-        updateServiceStatus('alpaca', data.alpaca);
         updateServiceStatus('tradier', data.tradier);
         updateModeStatus(data.mode);
-        updateRiskStatus(data.risk_mode);
         updateLiveArmedStatus();
+        
+        // TEMPORARY: Tradier-only mode - Alpaca is disabled
+        const brokerMode = data.broker_mode || 'TRADIER_ONLY';
+        if (brokerMode === 'TRADIER_ONLY') {
+            updateAlpacaDisabled();
+            updateBrokerModeStatus('TRADIER_ONLY');
+            // Force aggressive risk mode in testing state
+            updateRiskStatus('aggressive');
+        } else {
+            updateServiceStatus('alpaca', data.alpaca);
+            updateRiskStatus(data.risk_mode);
+        }
     } catch (e) {
         console.error('Failed to refresh status:', e);
+    }
+}
+
+function updateAlpacaDisabled() {
+    const el = document.getElementById('status-alpaca');
+    if (!el) return;
+    
+    const dot = el.querySelector('.status-dot');
+    if (dot) {
+        dot.className = 'status-dot status-disabled';
+    }
+    el.title = 'Alpaca: Disabled (Tradier-only test mode)';
+}
+
+function updateBrokerModeStatus(mode) {
+    const badge = document.querySelector('.broker-mode-badge');
+    if (!badge) return;
+    
+    if (mode === 'TRADIER_ONLY') {
+        badge.textContent = 'TRADIER ONLY';
+        badge.style.display = 'inline-block';
+    } else {
+        badge.style.display = 'none';
     }
 }
 
