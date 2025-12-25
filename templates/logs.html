@@ -141,6 +141,7 @@ async function loadLogs() {
                 <thead>
                     <tr>
                         <th>Time</th>
+                        <th>Mode</th>
                         <th>Action</th>
                         <th>Ticker</th>
                         <th>Details</th>
@@ -159,9 +160,16 @@ async function loadLogs() {
             const reason = log.reason || log.message || (log.result ? log.result.message : null) || '-';
             const hasSignal = log.parsed_summary != null;
             
+            const snap = log.settings_snapshot || {};
+            const execMode = snap.execution_mode_effective || log.execution_mode || 'PAPER';
+            const riskMode = (snap.risk_mode_effective || 'AGGR').substring(0, 4).toUpperCase();
+            const brokerMode = snap.broker_mode === 'TRADIER_ONLY' ? 'TRAD' : (snap.broker_mode || 'MULTI').substring(0, 4).toUpperCase();
+            const modeBadge = `${execMode.toUpperCase().substring(0, 5)} / ${riskMode} / ${brokerMode}`;
+            
             html += `
                 <tr>
                     <td title="${escapeHtml(log.ts_utc || '')}">${formatLogTimestamp(log)}</td>
+                    <td class="mode-cell" style="font-size: 10px; font-weight: 600; color: #666;">${modeBadge}</td>
                     <td class="${actionClass}">${escapeHtml(log.action || '-')}</td>
                     <td>
                         ${escapeHtml(ticker)}

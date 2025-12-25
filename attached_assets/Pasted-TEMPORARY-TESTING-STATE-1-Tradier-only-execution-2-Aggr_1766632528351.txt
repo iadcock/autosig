@@ -1,0 +1,192 @@
+TEMPORARY TESTING STATE: (1) Tradier-only execution + (2) Aggressive-only risk + (3) Logging upgrades
+
+GOAL:
+For testing, remove all variability:
+- Execute ALL paper trades through Tradier only (no Alpaca order submission)
+- Lock risk behavior to AGGRESSIVE only (no Conservative/Balanced logic)
+- Fix Execution History to include timestamps, correct mode snapshots, and clean hover popups for parsed signals
+
+This is temporary. We will re-introduce multi-broker routing and risk modes after testing.
+
+────────────────────────────────────────
+A) TRADIER-ONLY EXECUTION MODE (Backend)
+────────────────────────────────────────
+
+1) Add config flag:
+EXECUTION_BROKER_MODE = "TRADIER_ONLY" | "MULTI"
+Default to: TRADIER_ONLY (for now)
+
+2) Routing rules in TRADIER_ONLY:
+- Any TradeIntent (stocks, ETFs, options, SPX options, spreads) routes to Tradier adapter.
+- Alpaca adapter must NEVER submit orders in this mode.
+
+3) Hard-disable Alpaca submits:
+In Alpaca adapter (submit_order, close_order, cancel_order), add:
+if EXECUTION_BROKER_MODE == "TRADIER_ONLY":
+  return { "status": "SKIPPED", "reason": "Tradier-only test mode (Alpaca execution disabled)" }
+
+Important:
+- Do NOT log “submitted to Alpaca” in this mode.
+- Keep Alpaca health endpoints if desired, but no execution calls.
+
+4) Tradier execution:
+- For STOCK/ETF intents: place equity order to Tradier sandbox
+- For OPTION intents: place option order to Tradier sandbox
+- For SPREAD intents:
+   - If multi-leg submission is not implemented, do NOT fake it.
+   - Log SKIP with reason: "SPREAD_SUBMIT_NOT_IMPLEMENTED"
+   - Still show parsed summary so we can verify parsing.
+
+────────────────────────────────────────
+B) FORCE AGGRESSIVE RISK MODE ONLY (Backend + UI)
+────────────────────────────────────────
+
+1) Remove all branching on risk_mode.
+Everywhere risk_mode is read (preflight, filters, guards):
+- Ignore stored/UI-selected risk_mode
+- Force:
+  risk_mode_effective = "AGGRESSIVE"
+
+Store:
+risk_mode_requested = settings.get("risk_mode")
+risk_mode_effective = "AGGRESSIVE"
+
+2) Disable ALL Conservative/Balanced-only skips:
+REMOVE/BYPASS logic that blocks:
+- long positions
+- debit trades
+- credit spreads
+- PUT_CREDIT_SPREAD / PUT_DEBIT_SPREAD
+- conservative trade caps
+
+AGGRESSIVE behavior allows all valid strategies (subject to generic caps if they’re not mode-dependent).
+
+3) Settings storage:
+- Hardcode risk_mode="AGGRESSIVE"
+- Ignore POST attempts to change risk mode during this testing state
+
+4) Settings UI:
+- Remove Risk Mode dropdown
+- Show static label:
+  "Risk Mode: AGGRESSIVE (locked for testing)"
+
+5) Header/Status Row:
+- Always display AGGRESSIVE (do not infer from cached settings)
+
+────────────────────────────────────────
+C) EXECUTION LOG TIMESTAMPS (fix Time “-”)
+────────────────────────────────────────
+
+Every execution log entry must include:
+- ts_utc: ISO UTC string
+- tz: "America/Los_Angeles"
+- time_display: preformatted local display OR compute in UI
+
+Example:
+"ts_utc": "2025-12-24T23:50:12.123Z",
+"tz": "America/Los_Angeles"
+
+If old entries lack timestamps:
+- display “Unknown”
+- ALL new entries must include timestamps
+
+UI:
+- Render: "Wed, 12/24 4:00 PM PT"
+- Tooltip shows raw ISO UTC
+
+────────────────────────────────────────
+D) FIX MODE CONFUSION IN LOGS (Snapshot per row)
+────────────────────────────────────────
+
+Each log entry must store settings snapshot at time of decision:
+- risk_mode_requested
+- risk_mode_effective ("AGGRESSIVE")
+- execution_mode_requested (paper/live/dual)
+- execution_mode_effective
+- live_armed (LIVE_TRADING && !DRY_RUN)
+- auto_mode_enabled
+- broker_mode (TRADIER_ONLY)
+
+Remove/Prevent misleading messages like:
+“Long positions disabled in CONSERVATIVE mode”
+These should never appear while this testing state is active.
+
+Add a compact “Mode” display in the logs UI (or badges):
+- "PAPER / AGGR / TRADIER_ONLY"
+
+────────────────────────────────────────
+E) PARSED SIGNAL HOVER POPUP (Clean + minimal)
+────────────────────────────────────────
+
+Store a minimal parsed summary per log row:
+parsed_summary = {
+  "underlying": "SPX",
+  "ticker": "SPX" (or underlying),
+  "strategy": "PUT_CREDIT_SPREAD",
+  "expiration": "2025-12-19",
+  "legs": ["-1 4800P", "+1 4750P"],
+  "limit": "2.60–2.70 credit",
+  "size_pct": 1
+}
+
+DO NOT store raw HTML or full JSON blobs in the log entry.
+
+UI:
+- Add 🛈 icon per row
+- Hover/tap opens a small popover showing:
+  Ticker/Underlying
+  Strategy
+  Exp
+  Legs
+  Limit
+  Size
+
+Keep it compact (no clutter).
+
+────────────────────────────────────────
+F) FIX STRATEGY NORMALIZATION (stop “Unknown strategy”)
+────────────────────────────────────────
+
+Update parsing/normalization to recognize at minimum:
+- PUT_DEBIT_SPREAD
+- PUT_CREDIT_SPREAD
+- CALL_DEBIT_SPREAD
+- CALL_CREDIT_SPREAD
+- CALL (single-leg)
+- PUT (single-leg)
+- EXIT / CLOSE instructions
+
+Normalize to consistent schema:
+instrument_type: STOCK | OPTION | OPTION_SPREAD | INDEX_OPTION
+option_type: PUT|CALL (if applicable)
+spread_type: DEBIT|CREDIT (if applicable)
+
+If truly unrecognized, log SKIP with reason "UNKNOWN_STRATEGY" and include parsed_excerpt.
+
+────────────────────────────────────────
+G) UI UPDATES (Brokers + Status)
+────────────────────────────────────────
+
+1) Status Row:
+- Show Tradier status as active
+- Show Alpaca status as “Disabled (Tradier-only test mode)”
+- Show broker mode tag: “TRADIER ONLY”
+
+2) Brokers page:
+- Disable Alpaca execution buttons (health check can remain)
+- Add helper text on Alpaca card:
+  “Execution disabled in Tradier-only test mode”
+
+3) Ensure no “submitted to Alpaca” appears anywhere in UI/logs while TRADIER_ONLY is active.
+
+────────────────────────────────────────
+Acceptance Criteria
+────────────────────────────────────────
+
+1) No new orders appear in Alpaca paper after this change.
+2) Valid signals are no longer skipped as “Unknown strategy” for PUT/CALL debit/credit spreads (at least recognized).
+3) Execution History shows timestamps (not “-”).
+4) Logs show: PAPER / AGGR / TRADIER_ONLY mode snapshot.
+5) Hover popup shows clean parsed signal details without clutter.
+6) Any spreads not yet executable are clearly SKIPPED with "SPREAD_SUBMIT_NOT_IMPLEMENTED" (no fake “submitted”).
+7) Any real submissions to Tradier include Tradier order_id + status in logs.

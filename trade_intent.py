@@ -68,7 +68,7 @@ class ExecutionResult(BaseModel):
     Captures the outcome regardless of which broker executed the trade.
     """
     intent_id: str = Field(description="ID of the TradeIntent that was executed")
-    status: Literal["FILLED", "SUBMITTED", "REJECTED", "SIMULATED", "ERROR"] = "SUBMITTED"
+    status: Literal["FILLED", "SUBMITTED", "REJECTED", "SIMULATED", "ERROR", "SKIPPED"] = "SUBMITTED"
     
     broker: str = Field(description="Broker that executed the trade, e.g., 'tradier', 'alpaca', 'paper'")
     order_id: Optional[str] = Field(default=None, description="Broker-assigned order ID")

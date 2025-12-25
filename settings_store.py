@@ -27,6 +27,8 @@ DEFAULT_SETTINGS = {
 
 FORCED_RISK_MODE = "aggressive"
 
+EXECUTION_BROKER_MODE = "TRADIER_ONLY"
+
 VALID_RISK_MODES = ("conservative", "balanced", "aggressive")
 VALID_EXECUTION_MODES = ("paper", "live", "dual")
 

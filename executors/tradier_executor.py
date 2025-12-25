@@ -72,6 +72,20 @@ class TradierExecutor(BaseExecutor):
                 return self._execute_stock_order(intent)
             elif intent.instrument_type == "OPTION":
                 return self._execute_option_order(intent)
+            elif intent.instrument_type == "SPREAD":
+                return ExecutionResult(
+                    intent_id=intent.id,
+                    status="SKIPPED",
+                    broker=self.broker_name,
+                    message="SPREAD_SUBMIT_NOT_IMPLEMENTED - Multi-leg spread submission not yet supported"
+                )
+            elif intent.instrument_type == "OPTION_SPREAD":
+                return ExecutionResult(
+                    intent_id=intent.id,
+                    status="SKIPPED",
+                    broker=self.broker_name,
+                    message="SPREAD_SUBMIT_NOT_IMPLEMENTED - Multi-leg spread submission not yet supported"
+                )
             else:
                 return ExecutionResult(
                     intent_id=intent.id,

@@ -525,6 +525,11 @@ input:checked + .toggle-slider:before {
     background: #6c757d;
 }
 
+.status-dot.status-disabled {
+    background: #495057;
+    opacity: 0.5;
+}
+
 .status-label {
     color: #aaa;
     font-size: 11px;
@@ -598,6 +603,21 @@ input:checked + .toggle-slider:before {
 
 .risk-badge.risk-aggressive {
     background: #fd7e14;
+    color: white;
+}
+
+.broker-mode-item {
+    margin-left: 10px;
+}
+
+.broker-mode-badge {
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #17a2b8;
     color: white;
 }
 

@@ -17,7 +17,7 @@ EXECUTION_PLAN_LOG = "logs/execution_plan.jsonl"
 
 def _get_settings_snapshot() -> Dict[str, Any]:
     """Get a snapshot of current settings at time of decision."""
-    from settings_store import load_settings, FORCED_RISK_MODE
+    from settings_store import load_settings, FORCED_RISK_MODE, EXECUTION_BROKER_MODE
     from mode_manager import get_effective_execution_mode, is_live_allowed
     from auto_mode import get_auto_status
     
@@ -34,6 +34,7 @@ def _get_settings_snapshot() -> Dict[str, Any]:
         "execution_mode_effective": mode_info["effective"],
         "live_armed": live_armed,
         "auto_mode_enabled": auto_status.get("enabled", False),
+        "broker_mode": EXECUTION_BROKER_MODE,
     }
 
 
