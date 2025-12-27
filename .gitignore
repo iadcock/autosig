@@ -46,7 +46,10 @@ htmlcov/
 state.json
 
 # Logs
-logs/*.log
+logs/
+*.log
+*.jsonl
+*.csv
 
 # Environment variables (local development)
 .env.local
