@@ -50,6 +50,11 @@ logs/
 *.log
 *.jsonl
 *.csv
+*.bin
+
+# Local system artifacts
+.local/
+.config/
 
 # Environment variables (local development)
 .env.local
