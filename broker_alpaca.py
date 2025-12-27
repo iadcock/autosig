@@ -12,6 +12,7 @@ from typing import Optional, Any
 
 from models import ParsedSignal, OptionLeg
 import config
+from settings_store import EXECUTION_BROKER_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,13 @@ def place_vertical_call_debit_spread(
         "status": "NOT_SENT"
     }
     
+    # Broker mode guard: Alpaca execution disabled in TRADIER_ONLY mode
+    if EXECUTION_BROKER_MODE == "TRADIER_ONLY":
+        order_info["status"] = "BLOCKED"
+        order_info["message"] = f"Alpaca execution disabled (BROKER_MODE={EXECUTION_BROKER_MODE})"
+        logger.warning(f"Alpaca execution blocked: BROKER_MODE is {EXECUTION_BROKER_MODE}")
+        return order_info
+    
     if config.DRY_RUN:
         order_info["status"] = "DRY_RUN"
         order_info["message"] = "Order not sent (DRY_RUN mode)"
@@ -195,6 +203,13 @@ def place_vertical_call_credit_spread(
         "status": "NOT_SENT"
     }
     
+    # Broker mode guard: Alpaca execution disabled in TRADIER_ONLY mode
+    if EXECUTION_BROKER_MODE == "TRADIER_ONLY":
+        order_info["status"] = "BLOCKED"
+        order_info["message"] = f"Alpaca execution disabled (BROKER_MODE={EXECUTION_BROKER_MODE})"
+        logger.warning(f"Alpaca execution blocked: BROKER_MODE is {EXECUTION_BROKER_MODE}")
+        return order_info
+    
     if config.DRY_RUN:
         order_info["status"] = "DRY_RUN"
         order_info["message"] = "Order not sent (DRY_RUN mode)"
@@ -274,6 +289,13 @@ def close_matching_position(signal: ParsedSignal) -> dict:
         "timestamp": datetime.now().isoformat(),
         "status": "NOT_SENT"
     }
+    
+    # Broker mode guard: Alpaca execution disabled in TRADIER_ONLY mode
+    if EXECUTION_BROKER_MODE == "TRADIER_ONLY":
+        order_info["status"] = "BLOCKED"
+        order_info["message"] = f"Alpaca execution disabled (BROKER_MODE={EXECUTION_BROKER_MODE})"
+        logger.warning(f"Alpaca execution blocked: BROKER_MODE is {EXECUTION_BROKER_MODE}")
+        return order_info
     
     if config.DRY_RUN:
         order_info["status"] = "DRY_RUN"

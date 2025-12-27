@@ -27,10 +27,21 @@ DEFAULT_SETTINGS = {
 
 FORCED_RISK_MODE = "aggressive"
 
-EXECUTION_BROKER_MODE = "TRADIER_ONLY"
-
+# Explicit allowlist: Only TRADIER_ONLY is supported in production
+VALID_BROKER_MODES = ("TRADIER_ONLY",)
 VALID_RISK_MODES = ("conservative", "balanced", "aggressive")
 VALID_EXECUTION_MODES = ("paper", "live", "dual")
+
+# Read BROKER_MODE from environment
+# If missing: default to TRADIER_ONLY (safe default)
+# If set to invalid value: will be caught by startup validation and exit
+_broker_mode_env = load_env("BROKER_MODE") or os.getenv("BROKER_MODE", "").strip().upper()
+if _broker_mode_env and _broker_mode_env in VALID_BROKER_MODES:
+    EXECUTION_BROKER_MODE = _broker_mode_env
+else:
+    # Default to TRADIER_ONLY if not set (preserves current behavior)
+    # Invalid values will be caught by startup validation
+    EXECUTION_BROKER_MODE = "TRADIER_ONLY"
 
 _settings_cache: Dict[str, Any] = {}
 

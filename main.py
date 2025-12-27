@@ -32,6 +32,7 @@ from jsonl_logger import (
     log_parsed_alert,
     log_execution_plan
 )
+from settings_store import EXECUTION_BROKER_MODE, VALID_BROKER_MODES
 import broker_alpaca
 
 logging.basicConfig(
@@ -45,6 +46,46 @@ logger = logging.getLogger(__name__)
 
 
 SIGNALS_LOG_FILE = "logs/parsed_signals.csv"
+
+
+def validate_broker_mode() -> None:
+    """
+    Validate broker mode configuration at startup.
+    Only TRADIER_ONLY is allowed in production.
+    Exits safely if broker mode is invalid or unsupported.
+    """
+    broker_mode = EXECUTION_BROKER_MODE
+    allowed_modes = VALID_BROKER_MODES
+    
+    if broker_mode not in allowed_modes:
+        logger.error("=" * 60)
+        logger.error("FATAL: Invalid or unsupported BROKER_MODE configuration")
+        logger.error(f"  Current value: '{broker_mode}'")
+        logger.error(f"  Allowed values: {', '.join(allowed_modes)}")
+        logger.error("  Tradier is the only supported broker in production.")
+        logger.error("  Application will exit to prevent unsafe execution.")
+        logger.error("=" * 60)
+        sys.exit(1)
+    
+    # Check if BROKER_MODE env var was explicitly set to something invalid
+    broker_mode_env = os.getenv("BROKER_MODE", "").strip().upper()
+    if broker_mode_env and broker_mode_env not in allowed_modes:
+        logger.error("=" * 60)
+        logger.error("FATAL: BROKER_MODE environment variable has invalid value")
+        logger.error(f"  Environment value: '{broker_mode_env}'")
+        logger.error(f"  Allowed values: {', '.join(allowed_modes)}")
+        logger.error("  Tradier is the only supported broker in production.")
+        logger.error("  Application will exit to prevent unsafe execution.")
+        logger.error("=" * 60)
+        sys.exit(1)
+    
+    logger.info("=" * 60)
+    logger.info("BROKER MODE VALIDATION")
+    logger.info(f"  Selected broker mode: {broker_mode}")
+    logger.info(f"  Allowed modes: {', '.join(allowed_modes)}")
+    logger.info("  Alpaca execution paths are DISABLED")
+    logger.info("  Only Tradier execution is enabled")
+    logger.info("=" * 60)
 
 
 def setup_file_logging() -> None:
@@ -310,6 +351,10 @@ def check_and_run_daily_summary(state: TradeState) -> TradeState:
 def run_polling_loop() -> None:
     """Main polling loop that fetches and processes alerts."""
     logger.info("Starting trading bot polling loop...")
+    
+    # Validate broker mode before starting execution
+    validate_broker_mode()
+    
     config.print_config_summary()
     
     next_summary_time = get_next_summary_run_time()
@@ -329,6 +374,12 @@ def run_polling_loop() -> None:
         state.daily_trades_count = 0
         state.last_reset_date = date.today().isoformat()
         save_state(state)
+    
+    # Heartbeat tracking
+    heartbeat_interval_seconds = 300  # Log heartbeat every 5 minutes
+    last_heartbeat = time.time()
+    start_time = time.time()
+    cycle_count = 0
     
     while True:
         try:
@@ -411,6 +462,14 @@ def run_polling_loop() -> None:
             
             state = check_and_run_daily_summary(state)
             
+            # Heartbeat log every N minutes
+            cycle_count += 1
+            current_time = time.time()
+            if current_time - last_heartbeat >= heartbeat_interval_seconds:
+                uptime_minutes = int((current_time - start_time) / 60)
+                logger.info(f"[HEARTBEAT] Bot alive - {cycle_count} cycles completed, uptime: {uptime_minutes} minutes")
+                last_heartbeat = current_time
+            
             logger.info(f"Sleeping for {config.POLL_INTERVAL_SECONDS} seconds...")
             time.sleep(config.POLL_INTERVAL_SECONDS)
             
@@ -442,6 +501,10 @@ def log_trade_result(signal: ParsedSignal, result: dict) -> None:
 def run_once() -> None:
     """Run a single cycle (useful for testing)."""
     logger.info("Running single cycle...")
+    
+    # Validate broker mode before starting execution
+    validate_broker_mode()
+    
     config.print_config_summary()
     
     state = load_state()
