@@ -1,0 +1,9 @@
+[build]
+builder = "NIXPACKS"
+
+# Railway Web Service Configuration
+# This start command is for the WEB SERVICE only
+# The WORKER SERVICE must be configured separately in Railway dashboard
+[deploy]
+startCommand = "gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 120 web:app"
+

@@ -40,6 +40,11 @@ class TradierExecutor(BaseExecutor):
     @property
     def client(self) -> TradierClient:
         """Lazy-load the Tradier client."""
+        import config
+        # PAPER MODE (DRY_RUN=True): Do NOT initialize broker client
+        if config.DRY_RUN:
+            raise RuntimeError("PAPER MODE — Signal-based replay does not require broker connectivity. "
+                             "Tradier client initialization blocked when DRY_RUN=True.")
         if self._client is None:
             self._client = get_client()
         return self._client
@@ -94,19 +99,21 @@ class TradierExecutor(BaseExecutor):
                     message=f"Unsupported instrument type: {intent.instrument_type}"
                 )
         except TradierError as e:
-            logger.error(f"Tradier execution error: {e}")
+            logger.error(f"Tradier execution error for intent {intent.id}: {e}")
             return ExecutionResult(
                 intent_id=intent.id,
                 status="ERROR",
                 broker=self.broker_name,
-                message=str(e)
+                order_id=None,
+                message=f"Tradier API error: {str(e)}"
             )
         except Exception as e:
-            logger.exception(f"Unexpected error executing trade: {e}")
+            logger.exception(f"Unexpected error executing trade {intent.id}: {e}")
             return ExecutionResult(
                 intent_id=intent.id,
                 status="ERROR",
                 broker=self.broker_name,
+                order_id=None,
                 message=f"Unexpected error: {e}"
             )
     
@@ -139,14 +146,24 @@ class TradierExecutor(BaseExecutor):
         )
         
         order_id = response.get("id")
-        status = response.get("status", "unknown")
+        broker_status = response.get("status", "unknown")
+        
+        # Consistency check: SUBMITTED status requires order_id
+        if order_id:
+            result_status = "SUBMITTED"
+            order_id_str = str(order_id)
+            logger.info(f"Tradier stock order accepted - Order ID: {order_id_str}, Broker status: {broker_status}")
+        else:
+            result_status = "ERROR"
+            order_id_str = None
+            logger.error(f"Tradier stock order failed - No order ID returned. Broker status: {broker_status}, Response: {response}")
         
         return ExecutionResult(
             intent_id=intent.id,
-            status="SUBMITTED" if order_id else "ERROR",
+            status=result_status,
             broker=self.broker_name,
-            order_id=str(order_id) if order_id else None,
-            message=f"Order status: {status}",
+            order_id=order_id_str,
+            message=f"Broker status: {broker_status}",
             submitted_payload=payload,
             raw_response=response
         )
@@ -200,14 +217,24 @@ class TradierExecutor(BaseExecutor):
         )
         
         order_id = response.get("id")
-        status = response.get("status", "unknown")
+        broker_status = response.get("status", "unknown")
+        
+        # Consistency check: SUBMITTED status requires order_id
+        if order_id:
+            result_status = "SUBMITTED"
+            order_id_str = str(order_id)
+            logger.info(f"Tradier option order accepted - Order ID: {order_id_str}, Broker status: {broker_status}")
+        else:
+            result_status = "ERROR"
+            order_id_str = None
+            logger.error(f"Tradier option order failed - No order ID returned. Broker status: {broker_status}, Response: {response}")
         
         return ExecutionResult(
             intent_id=intent.id,
-            status="SUBMITTED" if order_id else "ERROR",
+            status=result_status,
             broker=self.broker_name,
-            order_id=str(order_id) if order_id else None,
-            message=f"Order status: {status}",
+            order_id=order_id_str,
+            message=f"Broker status: {broker_status}",
             submitted_payload=payload,
             raw_response=response
         )

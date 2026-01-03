@@ -21,12 +21,8 @@ from models import ParsedSignal, TradeState
 from parser import parse_alert, get_alert_hash
 from scraper_whop import get_alerts
 from risk import RiskManager
-from summary import (
-    get_today_market_close_run_time,
-    get_next_summary_run_time,
-    write_daily_summary,
-    NY_TZ
-)
+from summary import NY_TZ
+# Daily summary generation disabled per v1.0 philosophy (analysis feature removed)
 from jsonl_logger import (
     log_raw_alert,
     log_parsed_alert,
@@ -106,7 +102,12 @@ def setup_file_logging() -> None:
 
 
 def log_parsed_signal(signal: ParsedSignal, status: str = "PARSED") -> None:
-    """Log a parsed signal to the CSV file for download."""
+    """
+    Log a parsed signal to the CSV file for download.
+    
+    OBSERVATIONAL ONLY — NOT USED FOR DECISION MAKING
+    This is execution state logging (what was parsed, what status it received).
+    """
     try:
         legs_str = ""
         if signal.legs:
@@ -230,9 +231,72 @@ def process_signal(
     """
     Process a single parsed signal through risk management and order execution.
     Returns order result dict.
+    
+    PAPER MODE (DRY_RUN=True): Uses signal-based replay via execution router.
+    LIVE MODE (DRY_RUN=False): Uses broker execution paths.
     """
     logger.info(f"Processing signal: {signal.strategy} for {signal.ticker}")
     
+    # PAPER MODE SHORT-CIRCUIT: Use execution router for signal-based replay
+    if config.DRY_RUN:
+        from signal_to_intent import build_trade_intent, classify_signal_type
+        from execution.router import execute_trade
+        from datetime import datetime
+        
+        # Convert ParsedSignal to dict for build_trade_intent
+        signal_dict = {
+            "ticker": signal.ticker,
+            "strategy": signal.strategy,
+            "expiration": str(signal.expiration) if signal.expiration else None,
+            "legs": [{"side": leg.side, "quantity": leg.quantity, "strike": leg.strike, 
+                     "option_type": leg.option_type} for leg in signal.legs],
+            "limit_min": signal.limit_min,
+            "limit_max": signal.limit_max,
+            "limit_kind": signal.limit_kind,
+            "quantity": signal.quantity,
+            "raw_text": signal.raw_text,
+            "signal_timestamp": datetime.utcnow().isoformat()  # Signal time for PAPER mode
+        }
+        
+        try:
+            trade_intent = build_trade_intent(signal_dict, execution_mode="PAPER")
+            execution_result = execute_trade(trade_intent)
+            
+            # Convert ExecutionResult to legacy dict format
+            result = {
+                "status": execution_result.status,
+                "ticker": signal.ticker,
+                "strategy": signal.strategy,
+                "quantity": signal.quantity,
+                "message": execution_result.message,
+                "order_id": execution_result.order_id
+            }
+            
+            # Update status labels for PAPER mode
+            if execution_result.status == "SIMULATED":
+                if "SIMULATED_ENTRY" in (execution_result.message or ""):
+                    result["status"] = "SIMULATED_ENTRY_AT_SIGNAL_TIME"
+                elif "SIMULATED_EXIT" in (execution_result.message or ""):
+                    result["status"] = "SIMULATED_EXIT_AT_SIGNAL_TIME"
+            
+            if result["status"] in ["SIMULATED_ENTRY_AT_SIGNAL_TIME", "SIMULATED_EXIT_AT_SIGNAL_TIME"]:
+                if "ENTRY" in result["status"]:
+                    dollar_risk = signal.limit_max * 100 * signal.quantity if signal.limit_max else 0
+                    risk_manager.record_trade(dollar_risk)
+                else:
+                    risk_manager.record_exit()
+            
+            return result
+        except Exception as e:
+            logger.error(f"PAPER MODE execution error: {e}")
+            return {
+                "status": "ERROR",
+                "reason": f"PAPER MODE execution failed: {str(e)}",
+                "ticker": signal.ticker,
+                "strategy": signal.strategy
+            }
+    
+    # LIVE MODE: Use broker execution paths (unchanged)
     if signal.strategy == "EXIT":
         result = broker_alpaca.close_matching_position(signal)
         if result["status"] in ["DRY_RUN", "SUBMITTED"]:
@@ -313,38 +377,12 @@ def process_signal(
 
 def check_and_run_daily_summary(state: TradeState) -> TradeState:
     """
-    Check if it's time to run the daily summary and run it if needed.
-    Uses NYSE calendar to determine market close time.
+    Daily summary generation disabled in v1.0.
+    
+    Per PHILOSOPHY.md: AutoSig does not provide performance analysis.
+    Summary generation is analysis/meta and must live outside AutoSig.
     """
-    now = datetime.now(NY_TZ)
-    today_ny = now.date()
-    today_str = today_ny.isoformat()
-    
-    if state.last_summary_date == today_str:
-        return state
-    
-    run_time = get_today_market_close_run_time()
-    
-    if run_time is None:
-        logger.debug(f"{today_str} is not a trading day - no summary needed")
-        return state
-    
-    if now >= run_time:
-        logger.info(f"Running daily summary for {today_str} (market close + 5 min)")
-        
-        try:
-            filepath = write_daily_summary(today_ny, SIGNALS_LOG_FILE)
-            logger.info(f"Daily summary written to: {filepath}")
-            
-            state.last_summary_date = today_str
-            save_state(state)
-            
-        except Exception as e:
-            logger.error(f"Failed to generate daily summary: {e}")
-    else:
-        next_run = run_time.strftime("%I:%M %p %Z")
-        logger.debug(f"Daily summary scheduled for {next_run}")
-    
+    # Daily summary disabled - analysis features removed per v1.0 philosophy
     return state
 
 
@@ -357,9 +395,7 @@ def run_polling_loop() -> None:
     
     config.print_config_summary()
     
-    next_summary_time = get_next_summary_run_time()
-    if next_summary_time:
-        logger.info(f"Next daily summary scheduled for: {next_summary_time.strftime('%Y-%m-%d %I:%M %p %Z')}")
+    # Daily summary generation disabled per v1.0 philosophy
     
     warnings = config.validate_config()
     for warning in warnings:
@@ -381,14 +417,23 @@ def run_polling_loop() -> None:
     start_time = time.time()
     cycle_count = 0
     
+    # Watchdog: Track last successful loop iteration
+    watchdog_timeout_seconds = 1200  # 20 minutes - safe threshold to avoid false positives
+    last_successful_iteration = time.time()
+    
     while True:
         try:
             logger.info("Fetching alerts...")
             alert_texts = get_alerts()
             
             if not alert_texts:
-                logger.info("No alerts fetched")
+                logger.warning("No alerts fetched from Whop - this may indicate:")
+                logger.warning("  1. Bot worker is running but Whop feed is empty")
+                logger.warning("  2. Whop authentication failed (check cookies/tokens)")
+                logger.warning("  3. Whop page structure changed (check selectors)")
+                logger.warning("  4. Network/connectivity issues")
             else:
+                logger.info(f"Fetched {len(alert_texts)} alerts from Whop")
                 signals = []
                 
                 for alert_text in alert_texts:
@@ -426,12 +471,24 @@ def run_polling_loop() -> None:
                             raw_excerpt=alert_text[:500]
                         )
                 
-                logger.info(f"Parsed {len(signals)} valid signals from {len(alert_texts)} alerts")
+                logger.info(f"Processing cycle: {new_alerts_count} new alerts, {duplicate_count} duplicates")
+                logger.info(f"Parsed {len(signals)} valid signals from {new_alerts_count} new alerts")
                 
-                account_equity = broker_alpaca.get_account_equity()
-                if account_equity is None:
-                    logger.error("Could not get account equity. Skipping this cycle.")
+                if new_alerts_count == 0 and len(alert_texts) > 0:
+                    logger.warning("All fetched alerts were duplicates - no new content since last run")
+                
+                # PAPER MODE (DRY_RUN=True): Skip broker connectivity
+                # Signal-based replay doesn't require account equity or broker connections
+                if config.DRY_RUN:
+                    logger.info("[PAPER MODE — SIGNAL-BASED REPLAY] Skipping broker connectivity check")
+                    account_equity = 100000.0  # Default for paper mode position sizing
                 else:
+                    account_equity = broker_alpaca.get_account_equity()
+                    if account_equity is None:
+                        logger.error("Could not get account equity. Skipping this cycle.")
+                        continue
+                
+                if account_equity:
                     for signal, post_id in signals:
                         alert_hash = get_alert_hash(signal.raw_text)
                         
@@ -462,12 +519,28 @@ def run_polling_loop() -> None:
             
             state = check_and_run_daily_summary(state)
             
+            # Update watchdog: Mark this iteration as successful
+            last_successful_iteration = time.time()
+            
             # Heartbeat log every N minutes
             cycle_count += 1
             current_time = time.time()
             if current_time - last_heartbeat >= heartbeat_interval_seconds:
                 uptime_minutes = int((current_time - start_time) / 60)
                 logger.info(f"[HEARTBEAT] Bot alive - {cycle_count} cycles completed, uptime: {uptime_minutes} minutes")
+                
+                # Watchdog check: Detect silent stalls
+                elapsed_since_last_iteration = current_time - last_successful_iteration
+                if elapsed_since_last_iteration >= watchdog_timeout_seconds:
+                    elapsed_minutes = int(elapsed_since_last_iteration / 60)
+                    logger.error("=" * 60)
+                    logger.error("WATCHDOG: Silent stall detected")
+                    logger.error(f"  Last successful iteration: {elapsed_minutes} minutes ago")
+                    logger.error(f"  Threshold: {int(watchdog_timeout_seconds / 60)} minutes")
+                    logger.error("  Exiting to trigger Railway restart")
+                    logger.error("=" * 60)
+                    sys.exit(1)
+                
                 last_heartbeat = current_time
             
             logger.info(f"Sleeping for {config.POLL_INTERVAL_SECONDS} seconds...")
@@ -482,7 +555,12 @@ def run_polling_loop() -> None:
 
 
 def log_trade_result(signal: ParsedSignal, result: dict) -> None:
-    """Log trade result to trades.log."""
+    """
+    Log trade result to trades.log.
+    
+    OBSERVATIONAL ONLY — NOT USED FOR DECISION MAKING
+    Records execution state (what was attempted, what happened at broker).
+    """
     logger.info("-" * 60)
     logger.info("TRADE LOG ENTRY")
     logger.info(f"  Timestamp: {datetime.now().isoformat()}")
@@ -544,6 +622,13 @@ def run_once() -> None:
 
 if __name__ == "__main__":
     setup_file_logging()
+    
+    # Initialize Auto Mode if enabled via environment variable
+    try:
+        from auto_mode import initialize_auto_mode
+        initialize_auto_mode()
+    except Exception as e:
+        logger.warning(f"Failed to initialize Auto Mode: {e}")
     
     if len(sys.argv) > 1 and sys.argv[1] == "--once":
         run_once()

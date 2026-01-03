@@ -286,9 +286,15 @@ def get_alerts() -> List[str]:
     alerts = scraper.fetch_alerts()
     
     if alerts:
+        logger.info(f"Successfully fetched {len(alerts)} alerts from Whop")
         return alerts
     
-    logger.info("Falling back to local sample alerts file")
+    logger.warning("Whop fetch returned empty - falling back to local sample alerts file")
+    logger.warning("This may indicate:")
+    logger.warning("  1. Whop authentication failed (check WHOP_ACCESS_TOKEN, etc.)")
+    logger.warning("  2. Whop page structure changed (check selectors in _extract_alerts)")
+    logger.warning("  3. Whop feed is empty")
+    logger.warning("  4. Network/connectivity issues")
     return fetch_alerts_from_local_file()
 
 

@@ -18,7 +18,7 @@ from dedupe_store import is_executed, mark_executed
 from execution import execute_trade
 from trade_intent import TradeIntent, OptionLeg, ExecutionResult
 from alpaca_option_resolver import is_alpaca_supported_underlying
-from settings_store import load_settings
+from settings_store import load_settings, EXECUTION_BROKER_MODE
 import config
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,87 @@ AUTO_STATE_FILE = "data/auto_state.json"
 _auto_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _auto_enabled = True
+_safety_checks_passed = False
+
+
+def _validate_auto_mode_safety():
+    """
+    Validate all safety requirements before Auto Mode can activate.
+    
+    Returns:
+        (passed: bool, failures: list[str])
+    """
+    failures = []
+    
+    # Check 1: DRY_RUN must be True (PAPER mode)
+    if not config.DRY_RUN:
+        failures.append("DRY_RUN must be True (currently False) - Auto Mode requires paper trading only")
+    
+    # Check 2: LIVE_TRADING must be False
+    if config.LIVE_TRADING:
+        failures.append(f"LIVE_TRADING must be False (currently True) - Auto Mode cannot run with live trading enabled")
+    
+    # Check 3: BROKER_MODE must be TRADIER_ONLY
+    if EXECUTION_BROKER_MODE != "TRADIER_ONLY":
+        failures.append(f"BROKER_MODE must be TRADIER_ONLY (currently {EXECUTION_BROKER_MODE})")
+    
+    # Check 4: Kill switch
+    kill_switch = (load_env("AUTO_MODE_KILL_SWITCH") or os.getenv("AUTO_MODE_KILL_SWITCH", "")).lower()
+    if kill_switch in ("true", "1", "yes", "on", "enabled"):
+        failures.append("AUTO_MODE_KILL_SWITCH is enabled - Auto Mode is globally disabled")
+    
+    passed = len(failures) == 0
+    return passed, failures
+
+
+def _log_auto_mode_safety_checks() -> bool:
+    """
+    Log all Auto Mode safety checks at startup.
+    
+    Returns:
+        True if all checks pass, False otherwise
+    """
+    logger.info("=" * 60)
+    logger.info("AUTO MODE SAFETY PRE-FLIGHT CHECKS")
+    logger.info("=" * 60)
+    
+    # Check 1: DRY_RUN
+    dry_run_ok = config.DRY_RUN
+    logger.info(f"  DRY_RUN: {dry_run_ok} {'✓' if dry_run_ok else '✗ FAIL'}")
+    
+    # Check 2: LIVE_TRADING
+    live_trading_ok = not config.LIVE_TRADING
+    logger.info(f"  LIVE_TRADING disabled: {live_trading_ok} {'✓' if live_trading_ok else '✗ FAIL'}")
+    
+    # Check 3: BROKER_MODE
+    broker_mode_ok = EXECUTION_BROKER_MODE == "TRADIER_ONLY"
+    logger.info(f"  BROKER_MODE == TRADIER_ONLY: {broker_mode_ok} ({EXECUTION_BROKER_MODE}) {'✓' if broker_mode_ok else '✗ FAIL'}")
+    
+    # Check 4: Kill switch
+    kill_switch = (load_env("AUTO_MODE_KILL_SWITCH") or os.getenv("AUTO_MODE_KILL_SWITCH", "")).lower()
+    kill_switch_enabled = kill_switch in ("true", "1", "yes", "on", "enabled")
+    kill_switch_ok = not kill_switch_enabled
+    logger.info(f"  AUTO_MODE_KILL_SWITCH disabled: {kill_switch_ok} {'✓' if kill_switch_ok else '✗ FAIL (KILL SWITCH ACTIVE)'}")
+    
+    # Daily limits
+    max_daily_trades = int(load_env("AUTO_MAX_TRADES_PER_DAY") or "10")
+    max_daily_notional = float(load_env("AUTO_MAX_NOTIONAL_PER_DAY") or "50000")
+    logger.info(f"  Daily limits: Max {max_daily_trades} trades, Max ${max_daily_notional:,.2f} notional")
+    
+    passed, failures = _validate_auto_mode_safety()
+    
+    if passed:
+        logger.info("=" * 60)
+        logger.info("ALL SAFETY CHECKS PASSED - Auto Mode can activate")
+        logger.info("=" * 60)
+    else:
+        logger.error("=" * 60)
+        logger.error("SAFETY CHECKS FAILED - Auto Mode will NOT activate")
+        for failure in failures:
+            logger.error(f"  ✗ {failure}")
+        logger.error("=" * 60)
+    
+    return passed
 
 # In-memory daily metrics (reset daily)
 _daily_metrics: Dict[str, Any] = {
@@ -69,12 +150,17 @@ def _load_counters() -> Dict[str, Any]:
     try:
         if os.path.exists(COUNTERS_FILE):
             with open(COUNTERS_FILE, "r") as f:
-                return json.load(f)
+                counters = json.load(f)
+                # Ensure notional tracking exists
+                if "notional_today" not in counters:
+                    counters["notional_today"] = 0.0
+                return counters
     except:
         pass
     return {
         "trades_today": 0,
         "trades_this_hour": 0,
+        "notional_today": 0.0,
         "last_trade_date": None,
         "last_trade_hour": None,
         "last_tick_time": None,
@@ -96,6 +182,7 @@ def _reset_counters_if_needed(counters: Dict[str, Any], now: datetime) -> Dict[s
     
     if counters.get("last_trade_date") != today:
         counters["trades_today"] = 0
+        counters["notional_today"] = 0.0
         counters["last_trade_date"] = today
     
     if counters.get("last_trade_hour") != current_hour:
@@ -634,24 +721,37 @@ def _log_auto_decision(
 
 
 def get_auto_status() -> Dict[str, Any]:
-    """Get current auto mode status."""
-    global _auto_enabled
+    """
+    Get current auto mode status.
+    
+    OBSERVATIONAL ONLY — NOT USED FOR DECISION MAKING
+    Returns execution state (enabled/disabled, limits, last action).
+    Counters are for safety limit enforcement, not performance analysis.
+    """
+    global _auto_enabled, _safety_checks_passed
     
     counters = _load_counters()
     window_status = is_within_auto_trading_window()
     
     max_daily = int(load_env("AUTO_MAX_TRADES_PER_DAY") or "10")
     max_hourly = int(load_env("AUTO_MAX_TRADES_PER_HOUR") or "3")
+    max_notional = float(load_env("AUTO_MAX_NOTIONAL_PER_DAY") or "50000")
     poll_seconds = int(load_env("AUTO_POLL_SECONDS") or "30")
+    
+    safety_passed, safety_failures = _validate_auto_mode_safety()
     
     return {
         "enabled": _auto_enabled,
+        "safety_checks_passed": safety_passed,
+        "safety_failures": safety_failures if not safety_passed else [],
         "within_window": window_status.get("within_window", False),
         "window_status": window_status,
         "trades_today": counters.get("trades_today", 0),
         "trades_this_hour": counters.get("trades_this_hour", 0),
+        "notional_today": counters.get("notional_today", 0.0),
         "max_daily": max_daily,
         "max_hourly": max_hourly,
+        "max_notional": max_notional,
         "poll_seconds": poll_seconds,
         "last_tick_time": counters.get("last_tick_time"),
         "last_action": counters.get("last_action"),
@@ -678,16 +778,61 @@ def set_auto_enabled(enabled: bool) -> Dict[str, Any]:
     return get_auto_status()
 
 
+def initialize_auto_mode():
+    """
+    Initialize Auto Mode based on environment variable.
+    Called at application startup.
+    """
+    global _auto_enabled
+    
+    auto_enabled_env = (load_env("AUTO_MODE_ENABLED") or os.getenv("AUTO_MODE_ENABLED", "")).lower() == "true"
+    
+    if auto_enabled_env:
+        logger.info("AUTO_MODE_ENABLED=true detected - Initializing Auto Mode")
+        _auto_enabled = True
+        _start_auto_thread()
+    else:
+        logger.info("AUTO_MODE_ENABLED not set or false - Auto Mode disabled")
+        _auto_enabled = False
+
+
 def _start_auto_thread():
     """Start the auto mode background thread."""
-    global _auto_thread, _stop_event
+    global _auto_thread, _stop_event, _safety_checks_passed, _auto_enabled
     
     if _auto_thread is not None and _auto_thread.is_alive():
+        return
+    
+    # Run safety pre-flight checks
+    _safety_checks_passed = _log_auto_mode_safety_checks()
+    
+    if not _safety_checks_passed:
+        logger.error("Auto Mode thread will NOT start due to failed safety checks")
+        _auto_enabled = False
         return
     
     _stop_event.clear()
     _auto_thread = threading.Thread(target=_auto_loop, daemon=True)
     _auto_thread.start()
+    
+    # High-visibility banner
+    max_daily_trades = int(load_env("AUTO_MAX_TRADES_PER_DAY") or "10")
+    max_daily_notional = float(load_env("AUTO_MAX_NOTIONAL_PER_DAY") or "50000")
+    max_hourly = int(load_env("AUTO_MAX_TRADES_PER_HOUR") or "3")
+    
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("  AUTO MODE ACTIVE — PAPER TRADING ONLY")
+    logger.info("=" * 70)
+    logger.info(f"  Mode: PAPER TRADING (DRY_RUN=True, LIVE_TRADING=False)")
+    logger.info(f"  Broker: TRADIER_ONLY (Sandbox)")
+    logger.info(f"  Daily Limits: {max_daily_trades} trades, ${max_daily_notional:,.2f} notional")
+    logger.info(f"  Hourly Limit: {max_hourly} trades")
+    logger.info(f"  Poll Interval: {int(load_env('AUTO_POLL_SECONDS') or '30')} seconds")
+    logger.info("  Status: ACTIVE - Monitoring signals and executing trades")
+    logger.info("=" * 70)
+    logger.info("")
+    
     logger.info("Auto mode thread started")
 
 
@@ -699,6 +844,15 @@ def _stop_auto_thread():
     if _auto_thread is not None:
         _auto_thread.join(timeout=5)
     _auto_thread = None
+    
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("  AUTO MODE DISABLED")
+    logger.info("=" * 70)
+    logger.info("  Status: STOPPED - No automated trading")
+    logger.info("=" * 70)
+    logger.info("")
+    
     logger.info("Auto mode thread stopped")
 
 
@@ -759,6 +913,24 @@ def auto_tick() -> Dict[str, Any]:
     
     Returns dict with action taken and details.
     """
+    global _safety_checks_passed, _auto_enabled
+    
+    # Re-validate safety checks on each tick
+    safety_passed, failures = _validate_auto_mode_safety()
+    if not safety_passed:
+        if _safety_checks_passed:  # Was passing, now failing
+            logger.error("AUTO MODE SAFETY CHECK FAILED - Disabling Auto Mode")
+            for failure in failures:
+                logger.error(f"  Safety failure: {failure}")
+            _auto_enabled = False
+            _safety_checks_passed = False
+        counters = _load_counters()
+        counters["last_action"] = f"BLOCKED: Safety check failed - {failures[0]}"
+        _save_counters(counters)
+        return {"action": "blocked", "reason": f"Safety check failed: {failures[0]}"}
+    
+    _safety_checks_passed = True
+    
     now = datetime.now()
     counters = _load_counters()
     counters = _reset_counters_if_needed(counters, now)
@@ -782,6 +954,7 @@ def auto_tick() -> Dict[str, Any]:
         )
         return {"action": "skip", "reason": "Auto mode disabled"}
     
+<<<<<<< Updated upstream
     window_status = is_within_auto_trading_window()
     if not window_status.get("within_window", False):
         window_reason = window_status.get("reason", "Outside trading window")
@@ -796,10 +969,34 @@ def auto_tick() -> Dict[str, Any]:
             max_hourly=max_hourly
         )
         return {"action": "pause", "reason": window_reason}
+=======
+    # PAPER MODE (DRY_RUN=True): Skip market window checks
+    # Signal-based replay doesn't require market hours
+    if not config.DRY_RUN:
+    # PAPER MODE (DRY_RUN=True): Skip market window checks
+    # Signal-based replay doesn't require market hours
+    if not config.DRY_RUN:
+        window_status = is_within_auto_trading_window()
+        if not window_status.get("within_window", False):
+            counters["last_action"] = f"PAUSE: {window_status.get('reason', 'Outside trading window')}"
+            _save_counters(counters)
+            return {"action": "pause", "reason": window_status.get("reason")}
+    else:
+        # PAPER MODE: Market hours not required for signal-based replay
+        logger.debug("PAPER MODE — Market window check skipped (signal-based replay)")
+    else:
+        # PAPER MODE: Market hours not required for signal-based replay
+        logger.debug("PAPER MODE — Market window check skipped (signal-based replay)")
+    
+    max_daily = int(load_env("AUTO_MAX_TRADES_PER_DAY") or "10")
+    max_hourly = int(load_env("AUTO_MAX_TRADES_PER_HOUR") or "3")
+    max_notional = float(load_env("AUTO_MAX_NOTIONAL_PER_DAY") or "50000")
+>>>>>>> Stashed changes
     
     if counters.get("trades_today", 0) >= max_daily:
-        counters["last_action"] = f"LIMIT: Daily limit reached ({max_daily})"
+        counters["last_action"] = f"LIMIT: Daily trade limit reached ({max_daily})"
         _save_counters(counters)
+<<<<<<< Updated upstream
         _log_auto_decision(
             signal=None,
             decision="BLOCKED",
@@ -809,6 +1006,9 @@ def auto_tick() -> Dict[str, Any]:
             max_hourly=max_hourly
         )
         return {"action": "limit", "reason": f"Daily limit reached ({max_daily})"}
+=======
+        return {"action": "limit", "reason": f"Daily trade limit reached ({max_daily})"}
+>>>>>>> Stashed changes
     
     if counters.get("trades_this_hour", 0) >= max_hourly:
         counters["last_action"] = f"LIMIT: Hourly limit reached ({max_hourly})"
@@ -822,6 +1022,11 @@ def auto_tick() -> Dict[str, Any]:
             max_hourly=max_hourly
         )
         return {"action": "limit", "reason": f"Hourly limit reached ({max_hourly})"}
+    
+    if counters.get("notional_today", 0.0) >= max_notional:
+        counters["last_action"] = f"LIMIT: Daily notional limit reached (${max_notional:,.2f})"
+        _save_counters(counters)
+        return {"action": "limit", "reason": f"Daily notional limit reached (${max_notional:,.2f})"}
     
     signals = list_recent_signals(limit=50)
     
@@ -943,6 +1148,7 @@ def auto_tick() -> Dict[str, Any]:
         
         execution_result = execute_trade(trade_intent)
         
+<<<<<<< Updated upstream
         if execution_result.status in ("filled", "accepted", "success"):
             _daily_metrics["executions_succeeded"] = _daily_metrics.get("executions_succeeded", 0) + 1
             
@@ -950,6 +1156,14 @@ def auto_tick() -> Dict[str, Any]:
             parsed_signal_data = selected.get("parsed_signal", {})
             _track_trade_pnl(trade_intent, execution_result, parsed_signal_data)
             
+=======
+        # Consistency check: SUBMITTED/FILLED status must have order_id
+        if execution_result.status in ("SUBMITTED", "FILLED") and not execution_result.order_id:
+            logger.error(f"CONSISTENCY ERROR in auto_mode - Intent {trade_intent.id} marked {execution_result.status} but no broker order_id")
+            logger.error(f"  Broker: {execution_result.broker}, Message: {execution_result.message}")
+        
+        if execution_result.status in ("filled", "accepted", "success", "SUBMITTED", "FILLED"):
+>>>>>>> Stashed changes
             mark_executed(
                 post_id=post_id,
                 execution_mode="paper",
@@ -960,6 +1174,18 @@ def auto_tick() -> Dict[str, Any]:
             
             counters["trades_today"] = counters.get("trades_today", 0) + 1
             counters["trades_this_hour"] = counters.get("trades_this_hour", 0) + 1
+            
+            # Track notional exposure for safety limit enforcement (not performance analysis)
+            notional = 0.0
+            if execution_result.fill_price:
+                notional = execution_result.fill_price * execution_result.filled_quantity * 100  # Options multiplier
+            elif trade_intent.limit_price:
+                notional = trade_intent.limit_price * trade_intent.quantity * 100
+            elif trade_intent.limit_max:
+                notional = trade_intent.limit_max * trade_intent.quantity * 100
+            
+            counters["notional_today"] = counters.get("notional_today", 0.0) + notional
+            # OBSERVATIONAL ONLY — NOT USED FOR DECISION MAKING
             counters["last_action"] = f"EXECUTED: {ticker} ({execution_result.status})"
             _save_counters(counters)
             

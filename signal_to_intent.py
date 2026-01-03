@@ -132,6 +132,10 @@ def build_trade_intent(
     
     signal_type = classify_signal_type(parsed_signal)
     
+    # Add signal timestamp for PAPER mode signal-time replay
+    from datetime import datetime
+    signal_timestamp = parsed_signal.get("signal_timestamp") or datetime.utcnow().isoformat()
+    
     return TradeIntent(
         execution_mode=execution_mode,
         instrument_type=instrument_type,
@@ -149,7 +153,8 @@ def build_trade_intent(
             "limit_kind": limit_kind,
             "expiration": exp_str,
             "source": "whop_parsed_signal",
-            "signal_type": signal_type
+            "signal_type": signal_type,
+            "signal_timestamp": signal_timestamp  # For PAPER mode signal-time replay
         }
     )
 

@@ -24,6 +24,12 @@ def _get_trading_client():
     """Get or create the Alpaca trading client."""
     global _trading_client
     
+    # PAPER MODE (DRY_RUN=True): Do NOT initialize broker client
+    if config.DRY_RUN:
+        logger.debug("PAPER MODE — Signal-based replay does not require broker connectivity. "
+                    "Alpaca client initialization skipped when DRY_RUN=True.")
+        return None
+    
     if _trading_client is not None:
         return _trading_client
     

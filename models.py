@@ -64,7 +64,7 @@ class TradeState(BaseModel):
     last_processed_id: Optional[str] = None
     last_processed_timestamp: Optional[str] = None
     processed_alert_hashes: list[str] = Field(default_factory=list)
-    daily_trades_count: int = 0
-    daily_risk_used: float = 0.0
+    daily_trades_count: int = 0  # OBSERVATIONAL ONLY — Safety limit tracking, not performance analysis
+    daily_risk_used: float = 0.0  # OBSERVATIONAL ONLY — Safety limit tracking, not performance analysis
     last_reset_date: Optional[str] = None
-    last_summary_date: Optional[str] = None
+    # last_summary_date removed per v1.0 philosophy (analysis feature)

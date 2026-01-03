@@ -110,7 +110,12 @@ class RiskManager:
         return None
     
     def record_trade(self, dollar_risk: float) -> None:
-        """Record a trade for daily tracking."""
+        """
+        Record a trade for daily risk limit tracking.
+        
+        OBSERVATIONAL ONLY — NOT USED FOR DECISION MAKING
+        Tracks daily_risk_used for safety limit enforcement, not performance analysis.
+        """
         self.daily_risk_used += dollar_risk
         self.open_positions_count += 1
         logger.info(

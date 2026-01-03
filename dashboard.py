@@ -2043,5 +2043,401 @@ def smoke_tradier():
     return jsonify(result)
 
 
+# ============================================================================
+# AutoSig v1.0 - Signal Feed & Replay Routes
+# ============================================================================
+
+@app.route("/feed")
+@login_required
+def signal_feed():
+    """Signal feed page (v1.0 cleaned UI)."""
+    return render_template('signal_feed.html',
+                          active_tab='feed',
+                          show_logout=config.requires_auth())
+
+
+@app.route("/replay")
+@login_required
+def replay_view():
+    """Daily replay view page."""
+    return render_template('replay.html',
+                          active_tab='replay',
+                          show_logout=config.requires_auth())
+
+
+@app.route("/api/signals/feed")
+@login_required
+def api_signal_feed():
+    """
+    API endpoint for signal feed data (read-only, mirrored certainty).
+    
+    Signal Feed behavior:
+    - Uses shared certainty resolution (user override → auto)
+    - Never allows edits
+    - Display only
+    - Shows same certainty as Review
+    """
+    try:
+        from jsonl_logger import PARSED_ALERTS_FILE
+        from paper_positions import get_open_positions
+        from signal_classification import resolve_certainty
+        import json
+        from pathlib import Path
+        
+        signals = []
+        
+        # Load parsed alerts
+        if Path(PARSED_ALERTS_FILE).exists():
+            with open(PARSED_ALERTS_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        signal_id = entry.get("post_id", "")
+                        parsed_signal = entry.get("parsed_signal")
+                        raw_text = entry.get("raw_excerpt", "")
+                        
+                        # CRITICAL: Load ALL signals, regardless of parsed_signal or classification state
+                        # Certainty resolution happens AFTER loading, never used as a filter
+                        
+                        # Signal Feed: Use shared certainty resolution (mirrors Review)
+                        # This must work even if parsed_signal is None
+                        try:
+                            certainty, certainty_source = resolve_certainty(signal_id, parsed_signal, raw_text)
+                        except Exception as e:
+                            logger.warning(f"Error resolving certainty for signal {signal_id}: {e}")
+                            # Fallback to auto-classify if resolve_certainty fails
+                            from signal_classification import auto_classify_signal
+                            if parsed_signal:
+                                certainty = auto_classify_signal(parsed_signal, raw_text)
+                            else:
+                                # No parsed_signal = LOG-ONLY (non-actionable)
+                                certainty = "LOG-ONLY"
+                            certainty_source = "A"
+                        
+                        # Ensure certainty and certainty_source are always present (backend bug if missing)
+                        if not certainty:
+                            logger.error(f"Missing certainty for signal {signal_id} - this is a backend bug")
+                            certainty = "AMBIGUOUS"  # Safe fallback
+                        if not certainty_source:
+                            logger.error(f"Missing certainty_source for signal {signal_id} - this is a backend bug")
+                            certainty_source = "A"  # Safe fallback
+                        
+                        signals.append({
+                            "signal_id": signal_id,
+                            "timestamp": entry.get("ts_iso", ""),
+                            "ticker": entry.get("parsed_signal", {}).get("ticker", "") if parsed_signal else "",
+                            "symbol": entry.get("parsed_signal", {}).get("ticker", "") if parsed_signal else "",
+                            "raw_text": raw_text or "",
+                            "parsed_signal": parsed_signal,
+                            "classification": entry.get("classification", ""),
+                            "certainty": certainty,
+                            "certainty_source": certainty_source,  # "A" or "U"
+                            "instrument_type": entry.get("parsed_signal", {}).get("instrument_type") if parsed_signal else None,
+                            "position_id": None  # Will be matched from positions
+                        })
+                    except Exception as e:
+                        logger.warning(f"Error parsing signal entry: {e}")
+                        continue
+        
+        # Match with open positions
+        open_positions = get_open_positions()
+        for signal in signals:
+            for pos in open_positions:
+                if pos.source_post_id == signal.get("signal_id"):
+                    signal["position_id"] = pos.position_id
+                    signal["position_status"] = "OPEN_PAPER"
+                    break
+        
+        # Sort by timestamp descending
+        signals.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        
+        return jsonify({"signals": signals[:100]})  # Limit to 100 most recent
+        
+    except Exception as e:
+        logger.error(f"Error loading signal feed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/replay/<date_str>")
+@login_required
+def api_replay_summary(date_str):
+    """API endpoint for daily replay summary."""
+    try:
+        from paper_summary import generate_paper_daily_summary
+        from datetime import datetime
+        
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+        summary = generate_paper_daily_summary(date_obj)
+        
+        if not summary:
+            return jsonify({"error": "No data for this date"}), 404
+        
+        return jsonify(summary)
+        
+    except Exception as e:
+        logger.error(f"Error loading replay summary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/positions/<position_id>")
+@login_required
+def api_position_detail(position_id):
+    """API endpoint for position detail."""
+    try:
+        from paper_positions import get_open_positions, load_positions
+        
+        # Load all positions (open and closed)
+        all_positions = load_positions()
+        
+        position = None
+        for pos in all_positions:
+            if pos.position_id == position_id:
+                position = pos
+                break
+        
+        if not position:
+            return jsonify({"error": "Position not found"}), 404
+        
+        # Build response with learning context only
+        result = {
+            "position_id": position.position_id,
+            "underlying": position.underlying,
+            "instrument_type": position.instrument_type,
+            "quantity": position.quantity,
+            "status": position.status,
+            "opened_at": position.opened_at,
+            "closed_at": position.closed_at,
+            "raw_signal": position.open_intent.get("raw_signal") if position.open_intent else None,
+            "open_intent": position.open_intent,
+            "close_intent": position.close_intent,
+            "capital_recapture_events": []  # TODO: Load from execution plans if needed
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error loading position detail: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
+# AutoSig v1.0 - Signal Review (Testing Mode - No Admin Auth Required)
+# ============================================================================
+
+@app.route("/signal-review")
+@login_required
+def signal_review():
+    """
+    Signal review interface (Testing Mode).
+    
+    ⚠️ TESTING MODE: No admin authentication required.
+    Intended for rapid iteration and dataset cleanup.
+    Execution behavior remains unchanged.
+    """
+    return render_template('admin_review.html',
+                          active_tab='review',
+                          show_logout=config.requires_auth())
+
+
+@app.route("/api/admin/signals")
+@login_required
+def api_admin_signals():
+    """
+    API endpoint for signal listing with filters.
+    
+    During Review Mode, signals may be automatically classified as EXECUTABLE
+    when all required execution parameters are explicitly present.
+    This is mechanical validation, not intent inference.
+    Ambiguous signals are never auto-resolved.
+    """
+    try:
+        from jsonl_logger import PARSED_ALERTS_FILE
+        from signal_classification import (
+            get_signal_classification,
+            list_classified_signals,
+            auto_classify_signal_if_unclassified
+        )
+        import json
+        from pathlib import Path
+        from datetime import datetime, timedelta
+        
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+        certainty_filter = request.args.get('certainty')  # Filter parameter
+        symbol = request.args.get('symbol')
+        
+        signals = []
+        
+        # Load parsed alerts
+        if Path(PARSED_ALERTS_FILE).exists():
+            with open(PARSED_ALERTS_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        signal_id = entry.get("post_id", "")
+                        entry_date = entry.get("ts_iso", "")
+                        
+                        # Apply date filters (handle ISO timestamp format correctly)
+                        # entry_date is ISO format like "2025-12-26T22:37:28.867473Z"
+                        # date_from/date_to are date strings like "2024-12-26" or "2025-12-26"
+                        if date_from:
+                            entry_date_only = entry_date[:10] if entry_date and len(entry_date) >= 10 else ""
+                            if entry_date_only and entry_date_only < date_from:
+                                continue
+                        if date_to:
+                            entry_date_only = entry_date[:10] if entry_date and len(entry_date) >= 10 else ""
+                            if entry_date_only and entry_date_only > date_to:
+                                continue
+                        
+                        ticker = entry.get("parsed_signal", {}).get("ticker", "")
+                        if symbol and ticker.upper() != symbol.upper():
+                            continue
+                        
+                        parsed_signal = entry.get("parsed_signal")
+                        raw_text = entry.get("raw_excerpt", "")
+                        
+                        # CRITICAL: Load ALL signals, regardless of parsed_signal or classification state
+                        # Certainty resolution happens AFTER loading, never used as a filter
+                        
+                        # Signal Review: Use shared certainty resolution (mirrors Feed)
+                        # This must work even if parsed_signal is None
+                        from signal_classification import resolve_certainty
+                        try:
+                            certainty, certainty_source = resolve_certainty(signal_id, parsed_signal, raw_text)
+                        except Exception as e:
+                            logger.warning(f"Error resolving certainty for signal {signal_id}: {e}")
+                            # Fallback to auto-classify if resolve_certainty fails
+                            from signal_classification import auto_classify_signal
+                            if parsed_signal:
+                                certainty = auto_classify_signal(parsed_signal, raw_text)
+                            else:
+                                # No parsed_signal = LOG-ONLY (non-actionable)
+                                certainty = "LOG-ONLY"
+                            certainty_source = "A"
+                        
+                        # Get classification for metadata (if exists) - LEFT JOIN equivalent
+                        classification = get_signal_classification(signal_id) if signal_id else None
+                        
+                        # Apply certainty filter ONLY if user explicitly requested it
+                        # This is a UI filter, not a data access filter
+                        if certainty_filter and certainty != certainty_filter:
+                            continue
+                        
+                        # Ensure certainty and certainty_source are always present (backend bug if missing)
+                        if not certainty:
+                            logger.error(f"Missing certainty for signal {signal_id} - this is a backend bug")
+                            certainty = "AMBIGUOUS"  # Safe fallback
+                        if not certainty_source:
+                            logger.error(f"Missing certainty_source for signal {signal_id} - this is a backend bug")
+                            certainty_source = "A"  # Safe fallback
+                        
+                        signals.append({
+                            "signal_id": signal_id,
+                            "timestamp": entry_date,
+                            "symbol": ticker or "",
+                            "raw_text": raw_text or "",
+                            "parsed_signal": parsed_signal,
+                            "classification": entry.get("classification", ""),
+                            "certainty": certainty,
+                            "certainty_source": certainty_source,
+                            "classified_by": classification.classified_by if classification else None,
+                            "classified_at": classification.classified_at if classification else None
+                        })
+                    except Exception as e:
+                        logger.warning(f"Error parsing signal entry: {e}")
+                        continue
+        
+        # Sort by timestamp descending
+        signals.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        
+        return jsonify({"signals": signals})
+        
+    except Exception as e:
+        logger.error(f"Error loading admin signals: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/classify", methods=["POST"])
+@login_required
+def api_admin_classify():
+    """
+    API endpoint for bulk signal classification.
+    
+    User selection always overrides AUTO.
+    Classification is persisted with certainty_source = USER.
+    """
+    try:
+        from signal_classification import classify_signal
+        
+        data = request.json
+        signal_ids = data.get("signal_ids", [])
+        certainty_level = data.get("certainty_level")
+        classified_by = data.get("classified_by", "admin")
+        
+        if certainty_level not in ["EXECUTABLE", "AMBIGUOUS", "LOG-ONLY"]:
+            return jsonify({"error": "Invalid certainty_level"}), 400
+        
+        # Persist classification with USER source (overrides AUTO)
+        # This will immediately update both Feed and Review via resolve_certainty
+        results = []
+        for signal_id in signal_ids:
+            try:
+                classification = classify_signal(
+                    signal_id=signal_id,
+                    certainty_level=certainty_level,
+                    classified_by=classified_by,
+                    notes=f"User override: {certainty_level}"
+                )
+                results.append({"signal_id": signal_id, "success": True})
+            except Exception as e:
+                results.append({"signal_id": signal_id, "success": False, "error": str(e)})
+        
+        return jsonify({"results": results})
+        
+    except Exception as e:
+        logger.error(f"Error classifying signals: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/resolve", methods=["POST"])
+@login_required
+def api_admin_resolve():
+    """API endpoint for resolving ambiguous signals."""
+    try:
+        from signal_classification import resolve_ambiguous_signal
+        
+        data = request.json
+        signal_id = data.get("signal_id")
+        action = data.get("action")
+        resolved_by = data.get("resolved_by", "admin")
+        quantity_or_percent = data.get("quantity_or_percent")
+        applies_to_position_id = data.get("applies_to_position_id")
+        effective_timestamp = data.get("effective_timestamp")
+        notes = data.get("notes")
+        
+        if action not in ["CLOSE_FULL", "CLOSE_PARTIAL", "CAPITAL_RECAPTURE", "IGNORE"]:
+            return jsonify({"error": "Invalid action"}), 400
+        
+        resolution = resolve_ambiguous_signal(
+            signal_id=signal_id,
+            action=action,
+            resolved_by=resolved_by,
+            quantity_or_percent=quantity_or_percent,
+            applies_to_position_id=applies_to_position_id,
+            effective_timestamp=effective_timestamp,
+            notes=notes
+        )
+        
+        return jsonify({"resolution": resolution.model_dump()})
+        
+    except Exception as e:
+        logger.error(f"Error resolving signal: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

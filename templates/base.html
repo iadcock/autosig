@@ -7,6 +7,11 @@
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+    <!-- Global Banner: AUTOSIG • PAPER MODE • LEARNING ONLY -->
+    <div style="background: #1a1a2e; color: white; padding: 12px; text-align: center; font-weight: 600; font-size: 14px; border-bottom: 2px solid #667eea;">
+        AUTOSIG • PAPER MODE • LEARNING ONLY
+    </div>
+
     <div class="status-row" id="statusRow">
         <a href="/brokers" class="status-item" id="status-whop" title="Whop: Never checked">
             <span class="status-dot status-unknown"></span>
@@ -38,9 +43,9 @@
         <div class="nav-brand">Trading Bot</div>
         <div class="nav-links">
             <a href="/" class="nav-link {% if active_tab == 'dashboard' %}active{% endif %}">Dashboard</a>
-            <a href="/review-ui" class="nav-link {% if active_tab == 'review' %}active{% endif %}">Review Queue</a>
-            <a href="/brokers" class="nav-link {% if active_tab == 'brokers' %}active{% endif %}">Brokers</a>
-            <a href="/settings" class="nav-link {% if active_tab == 'settings' %}active{% endif %}">Settings</a>
+            <a href="/feed" class="nav-link {% if active_tab == 'feed' %}active{% endif %}">Signal Feed</a>
+            <a href="/replay" class="nav-link {% if active_tab == 'replay' %}active{% endif %}">Replay</a>
+            <a href="/signal-review" class="nav-link {% if active_tab == 'review' %}active{% endif %}">Signal Review</a>
             <a href="/logs" class="nav-link {% if active_tab == 'logs' %}active{% endif %}">Logs</a>
         </div>
         <div class="nav-actions">

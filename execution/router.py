@@ -64,7 +64,9 @@ def execute_trade(intent: TradeIntent) -> ExecutionResult:
     """
     Execute a trade intent, routing to the appropriate executor.
     
-    TEMPORARY: In TRADIER_ONLY mode, all trades route to Tradier sandbox.
+    PAPER MODE SHORT-CIRCUIT (v1.0):
+    When DRY_RUN=True, all execution routes to signal-based paper replay.
+    No broker connectivity, no market hours, no price validation.
     
     Args:
         intent: The TradeIntent to execute
@@ -72,6 +74,26 @@ def execute_trade(intent: TradeIntent) -> ExecutionResult:
     Returns:
         ExecutionResult from the executor
     """
+    import config
+    
+    # PAPER MODE SHORT-CIRCUIT: When DRY_RUN=True, use signal-based paper replay
+    if config.DRY_RUN:
+        logger.info(f"[PAPER MODE — SIGNAL-BASED REPLAY] Routing trade {intent.id} to paper executor")
+        logger.info(f"  NO BROKER • NO MARKET HOURS • NO PRICE CONSTRAINTS")
+        executor = get_executor("PAPER")
+        result = executor.execute(intent)
+        
+        # Log execution result with paper mode labels
+        if result.status == "SIMULATED":
+            logger.info(f"PAPER MODE EXECUTION - Intent {intent.id} -> {result.message}")
+        elif result.status == "REJECTED":
+            logger.warning(f"PAPER MODE REJECTED - Intent {intent.id}: {result.message}")
+        else:
+            logger.info(f"PAPER MODE {result.status} - Intent {intent.id}: {result.message}")
+        
+        return result
+    
+    # LIVE MODE: Normal broker routing (unchanged)
     mode = intent.execution_mode
     
     if mode == "LIVE" and not LIVE_TRADING:
@@ -89,6 +111,33 @@ def execute_trade(intent: TradeIntent) -> ExecutionResult:
     
     result = executor.execute(intent)
     
-    logger.info(f"Execution result: {result.status} - {result.message}")
+    # Log execution result with broker truth
+    if result.status == "SUBMITTED":
+        if result.order_id:
+            logger.info(f"Execution SUCCESS - Intent {intent.id} -> Broker order {result.order_id} ({result.broker})")
+            logger.info(f"  Broker status: {result.message}")
+        else:
+            logger.error(f"CONSISTENCY ERROR - Intent {intent.id} marked SUBMITTED but no broker order_id")
+            logger.error(f"  This indicates a broker response inconsistency. Result: {result.status}, Message: {result.message}")
+    elif result.status == "ERROR":
+        logger.error(f"Execution FAILED - Intent {intent.id} -> {result.broker}: {result.message}")
+        if result.order_id:
+            logger.error(f"  Note: Broker order_id exists despite ERROR status: {result.order_id}")
+    elif result.status == "REJECTED":
+        logger.warning(f"Execution REJECTED - Intent {intent.id} -> {result.broker}: {result.message}")
+    else:
+        logger.info(f"Execution {result.status} - Intent {intent.id} -> {result.broker}: {result.message}")
+    
+    # Consistency check: SUBMITTED status must have order_id
+    if result.status == "SUBMITTED" and not result.order_id:
+        logger.error("=" * 60)
+        logger.error("CRITICAL: ExecutionResult inconsistency detected")
+        logger.error(f"  Intent ID: {intent.id}")
+        logger.error(f"  Status: {result.status}")
+        logger.error(f"  Broker: {result.broker}")
+        logger.error(f"  Order ID: {result.order_id}")
+        logger.error("  A SUBMITTED status requires a broker order_id")
+        logger.error("=" * 60)
+        # Don't change the result, but log the error clearly
     
     return result
