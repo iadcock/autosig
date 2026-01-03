@@ -1,5 +1,7 @@
 # AutoSig v1.0 — Railway Setup Guide
 
+> ⚠️ **IMPORTANT:** If your Worker Service is misclassified as a Web Service (Gunicorn keeps appearing, start command reverts), see **[RAILWAY_WORKER_FIX.md](./RAILWAY_WORKER_FIX.md)** for the authoritative fix.
+
 ## Architecture
 
 AutoSig requires **TWO separate Railway services** in the same project:
@@ -22,14 +24,21 @@ AutoSig requires **TWO separate Railway services** in the same project:
 
 ### Step 2: Create Worker Service
 
+⚠️ **CRITICAL:** When creating the Worker Service, you **MUST** select **"Background Worker"** or **"Worker"** as the service type. If you accidentally create it as a "Web Service", Railway will force Gunicorn and the start command will revert. See [RAILWAY_WORKER_FIX.md](./RAILWAY_WORKER_FIX.md) if this happens.
+
 1. In the **same Railway project**, add **another service**
-2. Connect it to the **same GitHub repository**
-3. Set the **start command**:
+2. **Service Type:** Select **"Background Worker"** or **"Worker"** (NOT "Web Service")
+3. Connect it to the **same GitHub repository**
+4. **Settings:**
+   - **Public Networking:** ❌ Disabled
+   - **Domains:** ❌ None
+   - **Ports:** ❌ None
+5. Set the **start command**:
    ```
    python main.py
    ```
-4. **Important:** Do NOT set a port or use Gunicorn for this service
-5. This service runs in the background and doesn't serve HTTP
+6. **Important:** Do NOT set a port or use Gunicorn for this service
+7. This service runs in the background and doesn't serve HTTP
 
 ### Step 3: Configure Environment Variables
 
