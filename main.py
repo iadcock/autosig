@@ -435,13 +435,17 @@ def run_polling_loop() -> None:
             else:
                 logger.info(f"Fetched {len(alert_texts)} alerts from Whop")
                 signals = []
+                new_alerts_count = 0
+                duplicate_count = 0
                 
                 for alert_text in alert_texts:
                     alert_hash = get_alert_hash(alert_text)
                     
                     if alert_hash in state.processed_alert_hashes:
+                        duplicate_count += 1
                         continue
                     
+                    new_alerts_count += 1
                     post_id = log_raw_alert(body=alert_text, source="whop")
                     
                     signal = parse_alert(alert_text)
