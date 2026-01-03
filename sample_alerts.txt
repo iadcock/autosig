@@ -36,3 +36,53 @@ TSLA bear call credit spread
 Limit 1.50-1.65 credit to open
 
 1% size
+
+
+AAPL bullish call debit spread
+
+1/19/2026 exp
+
++1 190 C / -1 195 C
+Limit 3.10-3.25 debit to open
+
+2% size
+
+
+AAPL trim position
+
+1/19/2026 exp
+
+-1 190 C
+Limit 4.20-4.30 credit to close
+
+50% trim
+
+
+SPY bear put debit spread
+
+1/5/2026 exp
+
++1 485 P / -1 480 P
+Limit 2.05-2.15 debit to open
+
+1.5% size
+
+
+NVDA bullish call debit spread
+
+1/10/2026 exp
+
++1 520 C / -1 525 C
+Limit 4.50-4.65 debit to open
+
+2% size
+
+
+MSFT bear call credit spread
+
+1/12/2026 exp
+
+-1 380 C / +1 385 C
+Limit 1.80-1.90 credit to open
+
+1% size
